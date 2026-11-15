@@ -5,7 +5,7 @@ Voyager 2's route from 1977 to 2026, flown by a small orbit library under gravit
 ## Run it
 
 ```
-git clone --recurse-submodules <this repository>     # GameApi is a submodule; it is only needed for viewing
+git clone --recurse-submodules https://github.com/henris42/solaris.git     # GameApi is a submodule; it is only needed for the game
 ./run.sh
 ```
 
@@ -173,3 +173,7 @@ Thrust, radiation and heat recoil, flattening beyond J2, rings and small moons, 
 - Planet, Sun and ring maps in visible light: Solar System Scope (`solarsystemscope.com/textures`), licence CC BY 4.0, made from NASA data.
 - Star map: NASA Scientific Visualization Studio, Deep Star Maps 2020 (`svs.gsfc.nasa.gov/4851`), from the Hipparcos, Tycho and Gaia catalogues.
 - GameApi: by its author, under its own licence (GPL and LGPL), used here with the author's consent.
+
+## Licence
+
+Our own files (the simulation, the game, `orbit/orbit.hpp`, the scripts) are under the Apache License 2.0, see `LICENSE`. The data, the maps, the spacecraft model and GameApi are their owners' and keep the terms listed under Sources.
