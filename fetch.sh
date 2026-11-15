@@ -33,18 +33,19 @@ hz -32 500@0 1986-01-28 1989-08-22 '10 d' v2_leg7.txt
 hz -32 500@0 1989-08-28 2026-09-28 '60 d' v2_leg9.txt
 
 # ---- flybys: everything as seen from the planet's centre ----
+# (399 is the Earth: not a mass in the model, only where the spacecraft's dish points)
 hz -32 500@599 1979-07-05 1979-07-14 '10 m' jup_v2.txt
-for b in 10 6; do hz $b 500@599 1979-07-03 1979-07-16 '6 h' jup_$b.txt; done
+for b in 10 6 399; do hz $b 500@599 1979-07-03 1979-07-16 '6 h' jup_$b.txt; done
 for b in 501 502 503 504; do hz $b 500@599 1979-07-04 1979-07-15 '20 m' jup_$b.txt; done
 
 hz -32 500@699 1981-08-22 1981-08-30 '10 m' sat_v2.txt
-for b in 10 5; do hz $b 500@699 1981-08-20 1981-09-01 '6 h' sat_$b.txt; done
-for b in 603 604 605 606; do hz $b 500@699 1981-08-21 1981-08-31 '20 m' sat_$b.txt; done
+for b in 10 5 399; do hz $b 500@699 1981-08-20 1981-09-01 '6 h' sat_$b.txt; done
+for b in 601 602 603 604 605 606 608; do hz $b 500@699 1981-08-21 1981-08-31 '20 m' sat_$b.txt; done
 
 hz -32 500@799 1986-01-21 1986-01-28 '10 m' ura_v2.txt
-hz 10 500@799 1986-01-19 1986-01-30 '6 h' ura_10.txt
+for b in 10 399; do hz $b 500@799 1986-01-19 1986-01-30 '6 h' ura_$b.txt; done
 for b in 701 702 703 704 705; do hz $b 500@799 1986-01-20 1986-01-29 '20 m' ura_$b.txt; done
 
 hz -32 500@899 1989-08-22 1989-08-28 '10 m' nep_v2.txt
-hz 10 500@899 1989-08-20 1989-08-30 '6 h' nep_10.txt
+for b in 10 399; do hz $b 500@899 1989-08-20 1989-08-30 '6 h' nep_$b.txt; done
 hz 801 500@899 1989-08-21 1989-08-29 '20 m' nep_801.txt

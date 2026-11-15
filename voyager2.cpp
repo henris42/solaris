@@ -120,7 +120,7 @@ struct planet {
 // Mean radius of a moon, km.
 double moon_radius(const std::string& name) {
   static const std::pair<const char*, double> r[] = {
-      {"Io", 1821.6}, {"Europa", 1560.8}, {"Ganymede", 2631.2}, {"Callisto", 2410.3}, {"Tethys", 531.0}, {"Dione", 561.4}, {"Rhea", 763.8},
+      {"Io", 1821.6}, {"Europa", 1560.8}, {"Ganymede", 2631.2}, {"Callisto", 2410.3}, {"Mimas", 198.8}, {"Enceladus", 252.3}, {"Iapetus", 734.5}, {"Tethys", 531.0}, {"Dione", 561.4}, {"Rhea", 763.8},
       {"Titan", 2574.7}, {"Ariel", 578.9}, {"Umbriel", 584.7}, {"Titania", 788.4}, {"Oberon", 761.4}, {"Miranda", 235.8}, {"Triton", 1353.4}};
   for (const auto& [n, km] : r) if (name == n) return km;
   return 0.0;
@@ -165,8 +165,9 @@ const std::vector<leg> kLegs{
       {"Ganymede", 9887.8328, "jup_503.txt"}, {"Callisto", 7179.2834, "jup_504.txt"}, {"Saturn", 37940584.8418, "jup_6.txt"}}},
     {"Jupiter to Saturn", "v2_leg3.txt", 21600.0, nullptr, cruise_masses(false)},
     {"Saturn flyby", "sat_v2.txt", 20.0, &kSaturn,
-     {{"Sun", kSun + kInner, "sat_10.txt"}, {"Tethys", 41.21, "sat_603.txt"}, {"Dione", 73.116, "sat_604.txt"},
-      {"Rhea", 153.94, "sat_605.txt"}, {"Titan", 8978.14, "sat_606.txt"}, {"Jupiter", 126712764.1, "sat_5.txt"}}},
+     {{"Sun", kSun + kInner, "sat_10.txt"}, {"Mimas", 2.503489, "sat_601.txt"}, {"Enceladus", 7.210367, "sat_602.txt"},
+      {"Tethys", 41.21, "sat_603.txt"}, {"Dione", 73.116, "sat_604.txt"}, {"Rhea", 153.94, "sat_605.txt"}, {"Titan", 8978.14, "sat_606.txt"},
+      {"Iapetus", 120.52, "sat_608.txt"}, {"Jupiter", 126712764.1, "sat_5.txt"}}},
     {"Saturn to Uranus", "v2_leg5.txt", 21600.0, nullptr, cruise_masses(false)},
     {"Uranus flyby", "ura_v2.txt", 10.0, &kUranus,
      {{"Sun", kSun + kInner, "ura_10.txt"}, {"Ariel", 83.43, "ura_701.txt"}, {"Umbriel", 85.40, "ura_702.txt"},
@@ -541,7 +542,7 @@ int main(int argc, char** argv) {
     const double unit = 1e6;
     double reach = 6.0 * f.nearest;  // the part of the leg shown: out to past the farthest moon
     for (std::size_t m = 1; m < l.masses.size(); ++m)
-      if (l.masses[m].gm < 1e5) reach = std::max(reach, 1.6 * norm(f.paths[m].front().pos));
+      if (l.masses[m].gm < 1e5 && norm(f.paths[m].front().pos) < 2.0e9) reach = std::max(reach, 1.6 * norm(f.paths[m].front().pos));
     view v;
     std::vector<vec3> nasa, sim;
     double tn = f.nasa.front().t;
@@ -589,6 +590,16 @@ int main(int argc, char** argv) {
         const vec3 d = (at ? at->pos : vec3{}) - f.sim[j];
         o << d.x / 1e3 << " " << d.y / 1e3 << " " << d.z / 1e3 << "\n";
       }
+    }
+    // the Earth: not a mass of the model, but where the spacecraft's dish points
+    const frame fr = pole_frame(l.centre->pole_ra, l.centre->pole_dec);
+    std::vector<orbit_sample> earth;
+    for (const row& r : read_horizons(std::string(l.truth).substr(0, 3) + "_399.txt")) earth.push_back({r.t, fr.turn(r.s.pos)});
+    o << "body Earth 6371\n";
+    for (std::size_t j = 0; j < f.sim.size(); ++j) {
+      const auto at = state_at(std::span<const orbit_sample>(earth), f.nasa[j].t);
+      const vec3 d = (at ? at->pos : vec3{}) - f.sim[j];
+      o << d.x / 1e3 << " " << d.y / 1e3 << " " << d.z / 1e3 << "\n";
     }
   }
   // out/sky-<planet>.glb: the sky as a ball seen from inside, laid out for a star map
@@ -649,8 +660,8 @@ int main(int argc, char** argv) {
   // measures every model it loads and scales it to its own size, by sampling the
   // model's triangles; the first triangle here is a flat one through two opposite
   // corners of the ball's box, so that it measures exactly that box.
-  for (const char* name : {"Jupiter", "Saturn", "Uranus", "Neptune", "Io", "Europa", "Ganymede", "Callisto", "Tethys", "Dione", "Rhea", "Titan",
-                           "Ariel", "Umbriel", "Titania", "Oberon", "Miranda", "Triton", "Sun", "Shade"}) {
+  for (const char* name : {"Jupiter", "Saturn", "Uranus", "Neptune", "Io", "Europa", "Ganymede", "Callisto", "Mimas", "Enceladus", "Tethys", "Dione", "Rhea", "Titan",
+                           "Iapetus", "Ariel", "Umbriel", "Titania", "Oberon", "Miranda", "Triton", "Sun", "Shade"}) {
     const bool sky = false;
     part p{name, {0.62f, 0.85f, 0.88f}, "", 1, {}, {}, {}, {}};
     if (std::string(name) == "Sun") p.rgb[0] = 1.0f, p.rgb[1] = 0.95f, p.rgb[2] = 0.8f;

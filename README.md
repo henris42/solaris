@@ -20,7 +20,7 @@ The route is flown in nine legs. Each leg starts from NASA's position and veloci
 | Earth to Jupiter | 1977-09-01 | 670 | 1 070 million km | 1 574 655 km | 1 in 679 |
 | Jupiter flyby | 1979-07-05 | 9 | 10.4 million km | 6 506 km | 1 in 1 601 |
 | Jupiter to Saturn | 1979-07-14 | 770 | 1 159 million km | 12 750 km | 1 in 90 886 |
-| Saturn flyby | 1981-08-22 | 8 | 9.0 million km | 9 845 km | 1 in 912 |
+| Saturn flyby | 1981-08-22 | 8 | 9.0 million km | 9 811 km | 1 in 916 |
 | Saturn to Uranus | 1981-08-30 | 1600 | 2 642 million km | 2 142 270 km | 1 in 1 233 |
 | Uranus flyby | 1986-01-21 | 7 | 9.1 million km | 27 km | 1 in 334 948 |
 | Uranus to Neptune | 1986-01-28 | 1300 | 2 161 million km | 3 088 630 km | 1 in 700 |
@@ -40,7 +40,7 @@ The flybys, with and without the planet's flattening (J2):
 | Flyby | Nearest | From the centre | Path turned by | Error with J2 | Without |
 |---|---|---|---|---|---|
 | Jupiter | 1979-07-09 22:30 | 721 336 km | 91.9° | 6 506 km | 6 993 km |
-| Saturn | 1981-08-26 03:20 | 160 719 km | 84.6° | 9 845 km | 234 km |
+| Saturn | 1981-08-26 03:20 | 160 721 km | 84.6° | 9 811 km | 177 km |
 | Uranus | 1986-01-24 18:00 | 107 155 km | 23.0° | 27 km | 103 km |
 | Neptune | 1989-08-25 04:00 | 29 599 km | 54.0° | 41 km | 6 415 km |
 
@@ -52,7 +52,7 @@ Times are TDB, to the nearest 10 minutes of NASA's table.
 - **Uranus and Neptune flybys fit to tens of kilometres**, and only with the planet's flattening in the model. Neptune without it is off by 6 415 km: Voyager passed 4 800 km above the cloud tops.
 - **The cruise legs drift by millions of kilometres.** The spacecraft corrected its course with its thrusters many times, and none of that is in a gravity model. A velocity change of one metre per second is 86 km a day.
 - **Jupiter: an engine burn is visible.** In a separate check (not part of this program) NASA's trajectory changes its velocity by about 13 m/s within hours after the closest approach, in a way gravity does not account for. That is the size and shape of a course correction; we have not looked it up in the mission log.
-- **Saturn: NASA's file fits a round Saturn.** With Saturn's flattening the simulation is 9 845 km off, without it 234 km. The flattening itself is right in our model: Tethys needs it (113 km against 19 595 km). So this stretch of the trajectory in Horizons behaves as if it had been computed without Saturn's flattening. We cannot confirm that from NASA's documentation.
+- **Saturn: NASA's file fits a round Saturn.** With Saturn's flattening the simulation is 9 811 km off, without it 177 km. The flattening itself is right in our model: Tethys needs it (113 km against 19 595 km). So this stretch of the trajectory in Horizons behaves as if it had been computed without Saturn's flattening. We cannot confirm that from NASA's documentation.
 - **Einstein does not matter here.** The relativistic correction is in the model. Switching it off changes the first leg by 170 km out of 1.5 million, the other legs by a few kilometres, the flybys by 0.1 km.
 
 ## How it works
@@ -113,26 +113,42 @@ The step is 5 to 20 seconds in a flyby and one to six hours in a cruise. Halving
 
 ![The four encounters](screens/all.jpg)
 
-`./play.sh [jupiter|saturn|uranus|neptune]` opens a GameApi window with the spacecraft in the middle and the planet, its moons, the Sun and the stars around it as they were seen from Voyager 2, speeded up 600 times.
+`./play.sh [jupiter|saturn|uranus|neptune]` opens a GameApi window and plays that system's tour: three minutes with every flyby in it, of the planet and of each moon Voyager 2 passed.
+
+![The Jupiter tour](screens/tour-jupiter.jpg)
+
+Each flyby is shown at a slow rate while the body is near, and the way between flybys is run through fast. The view keeps on the body whose turn it is, through the camera Voyager would have used for it: its narrow-angle camera (0.42 degrees wide) for the far moons, its wide-angle camera (3.2 degrees) for the nearer ones, and the eye beside the spacecraft for what fills the sky.
+
+| Tour | Flybys, in order, with the nearest distance from the body's centre |
+|---|---|
+| Jupiter, July 1979 | Callisto 215 028 km, Ganymede 62 063 km, Europa 205 532 km, Jupiter 721 336 km, Io 1 129 435 km |
+| Saturn, August 1981 | Iapetus 908 042 km, Titan 665 536 km, Dione 501 840 km, Mimas 309 412 km, Saturn 160 721 km, Enceladus 87 581 km, Tethys 93 363 km, Rhea 644 399 km |
+| Uranus, January 1986 | Titania 364 408 km, Oberon 469 492 km, Ariel 127 298 km, Miranda 28 600 km, Uranus 107 155 km, Umbriel 324 445 km |
+| Neptune, August 1989 | Neptune 29 599 km, Triton 39 754 km |
+
+These distances come out of the simulation; the terminal lists them with their dates when a tour starts.
 
 | | |
 |---|---|
-| drag with the mouse | look around the spacecraft |
-| wheel | nearer, farther |
+| drag with the mouse | look around; the view then stays where you put it until the next flyby |
+| wheel | nearer to the spacecraft, farther |
 | `1` `2` `3` `4` | Jupiter, Saturn, Uranus, Neptune |
-| `n`, `p` | next, previous flyby in the scene, facing it: the planet and each moon Voyager passed |
+| `z` | by eye, wide-angle camera, narrow-angle camera |
+| `v` | the spacecraft in view or not |
+| `n`, `p` | next, previous flyby, facing it |
 | `f` | face the planet |
 | `+` `-` | faster, slower |
+| `t` | the tour on or off (off: time at one rate, the view where you put it) |
 | space, `r` | pause, start of the scene |
 | Esc | quit |
 
-`./play.sh saturn -14 60` starts 14 hours before the nearest approach to Saturn at 60 times real speed. The terminal shows the date, the distance to the planet and the speed, and at the start of a scene the list of flybys in it (Jupiter: Callisto, Ganymede, Europa, the planet, Io; Saturn: Titan, Dione, the planet, Tethys, Rhea).
+`./play.sh saturn -14 60` starts without the tour, 14 hours before the nearest approach to Saturn at 60 times real speed; `./play.sh jupiter ganymede 1` starts at Ganymede's nearest approach in real time.
 
-True to life: the direction and apparent size of every body at every moment (from the simulation), the stars (NASA's star map, every star where it is in the sky, turned into the planet's frame), the planets in visible light, which side of each body is in sunlight, the planet's turning, Saturn's rings, the spacecraft's shape and surface.
+True to life: the direction and apparent size of every body at every moment (from the simulation), the stars (NASA's star map, every star where it is in the sky, turned into the planet's frame), the planets in visible light, which side of each body is in sunlight, the planet's turning, Saturn's rings, the spacecraft's shape and surface with its dish toward the Earth, the fields of its two cameras.
 
-Not true to life: time; the Sun, drawn at least a fifth of a degree wide; no shadows (of Saturn on its rings, of a planet on a moon); the way the spacecraft is turned (its dish should point at the Earth); GameApi's camera is a long lens, 17 degrees from top to bottom, so stars look larger than points.
+Not true to life: time; the Sun, drawn at least a fifth of a degree wide; no shadows (of Saturn on its rings, of a planet on a moon); how the spacecraft is rolled about its dish; through a camera the stars stay as the eye sees them; GameApi's own camera is a long lens, 17 degrees from top to bottom, so stars look larger than points.
 
-It has been run on a virtual screen only, where the pictures above were taken. Mouse and keys are written from GameApi's event codes and have not been tried by hand yet. The game sets new matrices in GameApi for every frame and GameApi keeps them all: memory grows slowly while it runs.
+It has been played by hand once (the scene keys worked) and otherwise run on a virtual screen, where these pictures were taken. Memory stayed level in a one-minute run. One run in about ten stopped by itself with an out-of-memory error a few seconds after the start; the cause is not found.
 
 Building GameApi on Ubuntu: `sudo apt-get install libsdl2-dev libsdl2-mixer-dev libglew-dev libfreetype-dev libopencv-dev` (its own README does not list the last one), then `make -j 8 depbuild` in `GameApi/GameApi`. GameApi asks for an antialiased window, which some X servers give only through EGL; `play.sh` sets `SDL_VIDEO_X11_FORCE_EGL=1` for that.
 
