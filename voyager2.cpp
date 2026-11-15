@@ -31,9 +31,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "orbit.hpp"
@@ -113,7 +115,16 @@ struct planet {
   double radius;     // km, the radius its J2 refers to
   double j2;
   double pole_ra, pole_dec;  // degrees, at the flyby
+  double day = 0.0;  // hours for one turn (negative: backwards)
 };
+// Mean radius of a moon, km.
+double moon_radius(const std::string& name) {
+  static const std::pair<const char*, double> r[] = {
+      {"Io", 1821.6}, {"Europa", 1560.8}, {"Ganymede", 2631.2}, {"Callisto", 2410.3}, {"Tethys", 531.0}, {"Dione", 561.4}, {"Rhea", 763.8},
+      {"Titan", 2574.7}, {"Ariel", 578.9}, {"Umbriel", 584.7}, {"Titania", 788.4}, {"Oberon", 761.4}, {"Miranda", 235.8}, {"Triton", 1353.4}};
+  for (const auto& [n, km] : r) if (name == n) return km;
+  return 0.0;
+}
 struct leg {
   const char* name;
   const char* truth;
@@ -127,10 +138,10 @@ struct leg {
 // radius: the published gravity fields of the planets (JPL satellite ephemerides).
 constexpr double kSun = 132712440041.279;
 constexpr double kInner = 22031.868551 + 324858.592 + 403503.235625 + 42828.375816;  // Mercury, Venus, Earth-Moon, Mars
-const planet kJupiter{"Jupiter", 126686531.900, 71492.0, 0.014696572, 268.056595, 64.495303};
-const planet kSaturn{"Saturn", 37931206.234, 60330.0, 0.016290573, 40.5956, 83.5377};
-const planet kUranus{"Uranus", 5793950.6103, 25559.0, 0.00351068, 257.311, -15.175};
-const planet kNeptune{"Neptune", 6835099.97, 25225.0, 0.00340843, 299.268, 42.954};
+const planet kJupiter{"Jupiter", 126686531.900, 71492.0, 0.014696572, 268.056595, 64.495303, 9.925};
+const planet kSaturn{"Saturn", 37931206.234, 60330.0, 0.016290573, 40.5956, 83.5377, 10.656};
+const planet kUranus{"Uranus", 5793950.6103, 25559.0, 0.00351068, 257.311, -15.175, -17.24};
+const planet kNeptune{"Neptune", 6835099.97, 25225.0, 0.00340843, 299.268, 42.954, 16.11};
 
 const std::vector<mass> kGiants{{"Jupiter", 126712764.1, "bary_5.txt"}, {"Saturn", 37940584.8418, "bary_6.txt"},
                                 {"Uranus", 5794556.4, "bary_7.txt"}, {"Neptune", 6836527.10058, "bary_8.txt"}};
@@ -243,6 +254,7 @@ struct part {
   std::string name;
   float rgb[3];
   std::string map;  // a file in textures/ without ".jpg"; empty: the plain colour
+  int shade = 0;    // 0: lit and glowing (readable anywhere), 1: lit only (day and night), 2: glowing only (the sky, the Sun)
   std::vector<float> pos, nrm, uv;
   std::vector<std::uint32_t> idx;
 };
@@ -341,7 +353,7 @@ void write_glb(const std::string& path, const std::vector<part>& parts) {
     if (p.idx.empty()) continue;
     const std::string jpeg = p.map.empty() ? "" : file_bytes(g_maps + "/" + p.map + ".jpg");
     const int ap = vectors(p.pos, "VEC3", 3, true), an = vectors(p.nrm, "VEC3", 3, false);
-    const int at = jpeg.empty() ? -1 : vectors(p.uv, "VEC2", 2, false);
+    const int at = vectors(p.uv, "VEC2", 2, false);  // also without a map of its own: the game may bring one
     const int vi = blob(p.idx.data(), p.idx.size() * 4, 34963);
     std::snprintf(b, sizeof b, ",{\"bufferView\":%d,\"componentType\":5125,\"count\":%zu,\"type\":\"SCALAR\"}", vi, p.idx.size());
     accessors += b;
@@ -351,18 +363,25 @@ void write_glb(const std::string& path, const std::vector<part>& parts) {
     std::snprintf(b, sizeof b, "%s{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d%s},\"indices\":%d,\"material\":%d,\"mode\":4}", material ? "," : "", ap, an, tc, ai, material);
     prims += b;
     if (jpeg.empty()) {
+      const float base = p.shade == 2 ? 0.0f : 1.0f, glow = p.shade == 1 ? 0.0f : p.shade == 2 ? 1.0f : 0.6f;
       std::snprintf(b, sizeof b, "%s{\"name\":\"%s\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[%.3f,%.3f,%.3f,1],\"metallicFactor\":0,\"roughnessFactor\":0.9},"
                     "\"emissiveFactor\":[%.3f,%.3f,%.3f]}",
-                    material ? "," : "", p.name.c_str(), p.rgb[0], p.rgb[1], p.rgb[2], 0.6f * p.rgb[0], 0.6f * p.rgb[1], 0.6f * p.rgb[2]);
+                    material ? "," : "", p.name.c_str(), base * p.rgb[0], base * p.rgb[1], base * p.rgb[2], glow * p.rgb[0], glow * p.rgb[1], glow * p.rgb[2]);
     } else {
       const int vj = blob(jpeg.data(), jpeg.size(), 0);
       std::snprintf(b, sizeof b, "%s{\"bufferView\":%d,\"mimeType\":\"image/jpeg\",\"name\":\"%s\"}", image ? "," : "", vj, p.map.c_str());
       images += b;
       std::snprintf(b, sizeof b, "%s{\"source\":%d,\"sampler\":0}", image ? "," : "", image);
       textures += b;
-      std::snprintf(b, sizeof b, "%s{\"name\":\"%s\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":%d},\"metallicFactor\":0,\"roughnessFactor\":0.9},"
-                    "\"emissiveTexture\":{\"index\":%d},\"emissiveFactor\":[0.7,0.7,0.7]}",
-                    material ? "," : "", p.name.c_str(), image, image);
+      if (p.shade == 1)
+        std::snprintf(b, sizeof b, "%s{\"name\":\"%s\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":%d},\"metallicFactor\":0,\"roughnessFactor\":1.0}}",
+                      material ? "," : "", p.name.c_str(), image);
+      else if (p.shade == 2)
+        std::snprintf(b, sizeof b, "%s{\"name\":\"%s\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[0,0,0,1],\"metallicFactor\":0,\"roughnessFactor\":1.0},"
+                      "\"emissiveTexture\":{\"index\":%d},\"emissiveFactor\":[1,1,1]}", material ? "," : "", p.name.c_str(), image);
+      else
+        std::snprintf(b, sizeof b, "%s{\"name\":\"%s\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":%d},\"metallicFactor\":0,\"roughnessFactor\":0.9},"
+                      "\"emissiveTexture\":{\"index\":%d},\"emissiveFactor\":[0.7,0.7,0.7]}", material ? "," : "", p.name.c_str(), image, image);
       ++image;
     }
     materials += b;
@@ -384,18 +403,18 @@ void write_glb(const std::string& path, const std::vector<part>& parts) {
 part ball_of(const std::string& name, vec3 c, double r, int around, int rings) {
   std::string map = name;
   for (char& ch : map) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-  part p{name, {0.62f, 0.85f, 0.88f}, std::ifstream(g_maps + "/" + map + ".jpg").good() ? map : "", {}, {}, {}, {}};
+  part p{name, {0.62f, 0.85f, 0.88f}, std::ifstream(g_maps + "/" + map + ".jpg").good() ? map : "", 0, {}, {}, {}, {}};
   add_ball(p, c, r, around, rings);
   return p;
 }
 
-// One view: NASA's trajectory as beads, the simulated one as a line, the bodies around them.
+// One view: the simulated trajectory as a line, the bodies around it.
 struct view {
-  part nasa{"NASA trajectory", {0.82f, 0.80f, 0.74f}, "", {}, {}, {}, {}};
-  part sim{"simulated", {0.16f, 0.47f, 0.84f}, "", {}, {}, {}, {}};
-  part orbits{"orbits", {0.50f, 0.50f, 0.48f}, "", {}, {}, {}, {}};
-  part moons{"moon orbits", {0.92f, 0.41f, 0.20f}, "", {}, {}, {}, {}};
-  part sun{"Sun", {1.0f, 0.82f, 0.25f}, "", {}, {}, {}, {}};
+  part nasa{"NASA trajectory", {0.82f, 0.80f, 0.74f}, "", 0, {}, {}, {}, {}};
+  part sim{"simulated", {0.16f, 0.47f, 0.84f}, "", 0, {}, {}, {}, {}};
+  part orbits{"orbits", {0.50f, 0.50f, 0.48f}, "", 0, {}, {}, {}, {}};
+  part moons{"moon orbits", {0.92f, 0.41f, 0.20f}, "", 0, {}, {}, {}, {}};
+  part sun{"Sun", {1.0f, 0.82f, 0.25f}, "", 0, {}, {}, {}, {}};
   std::vector<part> balls;  // planets and moons
 
   // Writes <dir>/<name>.glb, centred and scaled to reach 150 units from the middle (the
@@ -406,7 +425,7 @@ struct view {
     std::vector<part> all{nasa, sim, orbits, moons, sun};
     all.insert(all.end(), balls.begin(), balls.end());
     float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
-    for (std::size_t q = 0; q < 2; ++q)
+    for (std::size_t q = 1; q < 2; ++q)  // the simulated line frames the view
       for (std::size_t i = 0; i < all[q].pos.size(); ++i) { lo[i % 3] = std::min(lo[i % 3], all[q].pos[i]); hi[i % 3] = std::max(hi[i % 3], all[q].pos[i]); }
     float mid[3], half = 1e-9f;
     for (int i = 0; i < 3; ++i) { mid[i] = (lo[i] + hi[i]) / 2; half = std::max(half, (hi[i] - lo[i]) / 2); }
@@ -445,11 +464,6 @@ double half_extent(const std::vector<vec3>& p) {
     hi = {std::max(hi.x, v.x), std::max(hi.y, v.y), std::max(hi.z, v.z)};
   }
   return std::max({hi.x - lo.x, hi.y - lo.y, hi.z - lo.z}) / 2.0;
-}
-
-void add_beads(part& m, const std::vector<vec3>& p, double r, std::size_t want) {
-  const std::size_t k = std::max<std::size_t>(1, p.size() / want);
-  for (std::size_t i = 0; i < p.size(); i += k) add_ball(m, p[i], r, 8, 5);
 }
 
 std::vector<vec3> scaled(const std::vector<orbit_sample>& p, double t0, double t1, double unit, const frame& fr) {
@@ -507,7 +521,6 @@ int main(int argc, char** argv) {
       }
     }
     const double h = half_extent(nasa);
-    add_beads(v.nasa, nasa, h / 90.0, 70);
     add_tube(v.sim, sim, h / 220.0);
     for (std::size_t p = 0; p < 4; ++p) {
       const std::vector<orbit_sample>& path = late.paths[1 + p];
@@ -539,7 +552,6 @@ int main(int argc, char** argv) {
       sim.push_back((1.0 / unit) * f.sim[j]);
     }
     const double h = half_extent(nasa);
-    add_beads(v.nasa, nasa, h / 90.0, 60);
     add_tube(v.sim, sim, h / 220.0);
     for (std::size_t m = 1; m < l.masses.size(); ++m) {
       if (norm(f.paths[m].front().pos) > reach) continue;  // the Sun, another planet
@@ -554,5 +566,113 @@ int main(int argc, char** argv) {
     std::printf("%-17s 1 unit = %.0f km\n", (std::string(files[n]) + ".glb").c_str(), 1000.0 / k);
   }
   std::printf("each with a GameApi script of the same name (.txt)\n");
+
+  // ---- the game's data: each encounter as seen from the spacecraft ----
+  // out/<planet>.scene: the planet, its moons and the Sun relative to Voyager 2 at
+  // every epoch, km, in the planet's frame (z along its pole). The game (game.cpp)
+  // puts the spacecraft in the middle and these around it.
+  for (std::size_t n = 0; n < 4; ++n) {
+    const leg& l = kLegs[flyby_leg[n]];
+    const flown& f = flights[flyby_leg[n]];
+    std::ofstream o(out + "/" + files[n] + ".scene");
+    o.precision(10);
+    o << "planet " << l.centre->name << " " << l.centre->radius << " " << l.centre->day << "\n";
+    o << "epochs " << f.nasa.size() << " " << f.nasa[1].t - f.nasa[0].t << " " << f.nasa.front().date << "\n";
+    o << "body " << l.centre->name << " " << l.centre->radius << "\n";
+    for (const vec3& p : f.sim) o << -p.x / 1e3 << " " << -p.y / 1e3 << " " << -p.z / 1e3 << "\n";
+    for (std::size_t m = 0; m < l.masses.size(); ++m) {
+      const bool sun = m == 0;
+      if (!sun && moon_radius(l.masses[m].name) == 0.0) continue;  // another planet
+      o << "body " << l.masses[m].name << " " << (sun ? 695700.0 : moon_radius(l.masses[m].name)) << "\n";
+      for (std::size_t j = 0; j < f.sim.size(); ++j) {
+        const auto at = state_at(std::span<const orbit_sample>(f.paths[m]), f.nasa[j].t);
+        const vec3 d = (at ? at->pos : vec3{}) - f.sim[j];
+        o << d.x / 1e3 << " " << d.y / 1e3 << " " << d.z / 1e3 << "\n";
+      }
+    }
+  }
+  // out/sky-<planet>.glb: the sky as a ball seen from inside, laid out for a star map
+  // in celestial coordinates (centred at 0 h right ascension, which increases to the
+  // left) and turned into the planet's frame, so that every star is where it is.
+  for (std::size_t n = 0; n < 4; ++n) {
+    const planet& c = *kLegs[flyby_leg[n]].centre;
+    const frame fr = pole_frame(c.pole_ra, c.pole_dec);
+    part p{"stars", {1.0f, 1.0f, 1.0f}, "", 2, {}, {}, {}, {}};
+    put(p, {-1, -1, -1}, {0, 0, 1});
+    put(p, {1, 1, 1}, {0, 0, 1});
+    put(p, {-1, -1, -1}, {0, 0, 1});
+    for (std::uint32_t i : {0u, 1u, 2u}) p.idx.push_back(i);
+    const int around = 96, rings = 48;
+    for (int i = 0; i <= rings; ++i) {
+      const double dec = kPi / 2.0 - kPi * i / rings;
+      for (int j = 0; j <= around; ++j) {
+        const double ra = 2.0 * kPi * (0.5 - static_cast<double>(j) / around);
+        const vec3 d = fr.turn({std::cos(dec) * std::cos(ra), std::cos(dec) * std::sin(ra), std::sin(dec)});
+        put(p, d, -1.0 * d, static_cast<double>(j) / around, static_cast<double>(i) / rings);
+      }
+    }
+    for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(rings); ++i)
+      for (std::uint32_t j = 0; j < static_cast<std::uint32_t>(around); ++j) {
+        const std::uint32_t q = 3 + i * (around + 1) + j, b = q + around + 1;
+        for (std::uint32_t k : {q, q + 1, b, q + 1, b + 1, b}) p.idx.push_back(k);
+      }
+    write_glb(out + "/sky-" + files[n] + ".glb", {p});
+  }
+  // out/ring.glb: Saturn's rings, flat in the planet's equator, in units of the
+  // planet's radius, from the inner edge of the D ring to the F ring. The texture
+  // coordinate runs outward across them.
+  {
+    const double inner = 1.11, outer = 2.33;
+    part p{"rings", {0.8f, 0.74f, 0.62f}, "", 0, {}, {}, {}, {}};
+    put(p, {-outer, -outer, -outer}, {0, 0, 1});
+    put(p, {outer, outer, outer}, {0, 0, 1});
+    put(p, {-outer, -outer, -outer}, {0, 0, 1});
+    for (std::uint32_t i : {0u, 1u, 2u}) p.idx.push_back(i);
+    const int around = 180;
+    for (int side = 0; side < 2; ++side) {  // seen from above and from below
+      const auto base = static_cast<std::uint32_t>(p.pos.size() / 3);
+      for (int j = 0; j <= around; ++j) {
+        const double ph = 2.0 * kPi * j / around;
+        put(p, {inner * std::cos(ph), inner * std::sin(ph), 0}, {0, 0, side ? -1.0 : 1.0}, 0.0, 0.5);
+        put(p, {outer * std::cos(ph), outer * std::sin(ph), 0}, {0, 0, side ? -1.0 : 1.0}, 1.0, 0.5);
+      }
+      for (std::uint32_t j = 0; j < static_cast<std::uint32_t>(around); ++j) {
+        const std::uint32_t q = base + 2 * j, b = q + 1, c = q + 2, d = q + 3;
+        const std::uint32_t up[6] = {q, b, c, c, b, d}, down[6] = {q, c, b, b, c, d};
+        for (std::uint32_t k : side ? down : up) p.idx.push_back(k);
+      }
+    }
+    write_glb(out + "/ring.glb", {p});
+  }
+  // out/ball-<name>.glb: a ball of radius 1 with the body's surface map
+  // (ball-shade.glb: without one; the game draws sunlight with it). GameApi
+  // measures every model it loads and scales it to its own size, by sampling the
+  // model's triangles; the first triangle here is a flat one through two opposite
+  // corners of the ball's box, so that it measures exactly that box.
+  for (const char* name : {"Jupiter", "Saturn", "Uranus", "Neptune", "Io", "Europa", "Ganymede", "Callisto", "Tethys", "Dione", "Rhea", "Titan",
+                           "Ariel", "Umbriel", "Titania", "Oberon", "Miranda", "Triton", "Sun", "Shade"}) {
+    const bool sky = false;
+    part p{name, {0.62f, 0.85f, 0.88f}, "", 1, {}, {}, {}, {}};
+    if (std::string(name) == "Sun") p.rgb[0] = 1.0f, p.rgb[1] = 0.95f, p.rgb[2] = 0.8f;
+    if (sky || std::string(name) == "Sun") p.shade = 2;
+    put(p, {-1, -1, -1}, {0, 0, 1});
+    put(p, {1, 1, 1}, {0, 0, 1});
+    put(p, {-1, -1, -1}, {0, 0, 1});
+    for (std::uint32_t i : {0u, 1u, 2u}) p.idx.push_back(i);
+    part b = ball_of(name, {0, 0, 0}, 1.0, 64, 36);
+    p.map = b.map;
+    const auto base = static_cast<std::uint32_t>(p.pos.size() / 3);
+    p.pos.insert(p.pos.end(), b.pos.begin(), b.pos.end());
+    p.nrm.insert(p.nrm.end(), b.nrm.begin(), b.nrm.end());
+    p.uv.insert(p.uv.end(), b.uv.begin(), b.uv.end());
+    for (std::size_t i = 0; i < b.idx.size(); i += 3) {  // the sky is seen from inside
+      const std::uint32_t t[3] = {b.idx[i], b.idx[i + (sky ? 2 : 1)], b.idx[i + (sky ? 1 : 2)]};
+      for (std::uint32_t v : t) p.idx.push_back(base + v);
+    }
+    std::string file = name;
+    for (char& ch : file) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    write_glb(out + "/ball-" + file + ".glb", {p});
+  }
+  std::printf("game data: %s/<planet>.scene and %s/ball-<body>.glb\n", out.c_str(), out.c_str());
   return 0;
 }

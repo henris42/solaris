@@ -109,39 +109,56 @@ flowchart TD
 
 The step is 5 to 20 seconds in a flyby and one to six hours in a cruise. Halving every step changes the errors above by 11 km at most, on legs that are off by millions.
 
-## The 3D views
+## Fly along: the game
 
-`out/` holds six views as glTF files (`.glb`), each scaled to fit 300 units either side of its middle:
+![The four encounters](screens/all.jpg)
 
-| File | Shows | 1 unit |
-|---|---|---|
-| `route-planets.glb` | 1977 to 1989, past the four planets | 0.099 AU |
-| `route-whole.glb` | 1977 to 2026 | 0.352 AU |
-| `jupiter.glb`, `saturn.glb`, `uranus.glb`, `neptune.glb` | the flyby in the planet's own frame, the planet to scale | 15 565, 7 756, 7 883, 7 446 km |
+`./play.sh [jupiter|saturn|uranus|neptune]` opens a GameApi window with the spacecraft in the middle and the planet, its moons, the Sun and the stars around it as they were seen from Voyager 2, speeded up 600 times.
 
-In every view the grey beads are NASA's trajectory and the blue line is the simulated one. Where the line leaves the beads, the two differ. Planet orbits are thin grey, moon orbits orange with the moon where it was at the closest approach.
+| | |
+|---|---|
+| drag with the mouse | look around the spacecraft |
+| wheel | nearer, farther |
+| `1` `2` `3` `4` | Jupiter, Saturn, Uranus, Neptune |
+| `n`, `p` | next, previous flyby in the scene, facing it: the planet and each moon Voyager passed |
+| `f` | face the planet |
+| `+` `-` | faster, slower |
+| space, `r` | pause, start of the scene |
+| Esc | quit |
 
-Viewing is done with [GameApi](https://github.com/terop2/GameApi), which is the `GameApi/` submodule. Next to each `.glb` there is a GameApi script of the same name (`.txt`) that loads the view and puts NASA's model of the spacecraft at Voyager's place, enlarged. Build GameApi as its README says, then from `out/`:
+`./play.sh saturn -14 60` starts 14 hours before the nearest approach to Saturn at 60 times real speed. The terminal shows the date, the distance to the planet and the speed, and at the start of a scene the list of flybys in it (Jupiter: Callisto, Ganymede, Europa, the planet, Io; Saturn: Titan, Dione, the planet, Tethys, Rhea).
+
+True to life: the direction and apparent size of every body at every moment (from the simulation), the stars (NASA's star map, every star where it is in the sky, turned into the planet's frame), the planets in visible light, which side of each body is in sunlight, the planet's turning, Saturn's rings, the spacecraft's shape and surface.
+
+Not true to life: time; the Sun, drawn at least a fifth of a degree wide; no shadows (of Saturn on its rings, of a planet on a moon); the way the spacecraft is turned (its dish should point at the Earth); GameApi's camera is a long lens, 17 degrees from top to bottom, so stars look larger than points.
+
+It has been run on a virtual screen only, where the pictures above were taken. Mouse and keys are written from GameApi's event codes and have not been tried by hand yet. The game sets new matrices in GameApi for every frame and GameApi keeps them all: memory grows slowly while it runs.
+
+Building GameApi on Ubuntu: `sudo apt-get install libsdl2-dev libsdl2-mixer-dev libglew-dev libfreetype-dev libopencv-dev` (its own README does not list the last one), then `make -j 8 depbuild` in `GameApi/GameApi`. GameApi asks for an antialiased window, which some X servers give only through EGL; `play.sh` sets `SDL_VIDEO_X11_FORCE_EGL=1` for that.
+
+How the game draws, in GameApi's terms: every body is its own model with its own matrix, set anew each frame. GameApi scales each model it loads to 400 units across; the first triangle of each of our files spans the model's box so that this is exact. Bodies and sky are drawn in a first pass with the eye at the spacecraft, each at a distance that keeps their order and with the size that gives its true apparent size; the spacecraft is drawn in a second pass. Sunlight on a body is a second ball over it, turned to the Sun, clear on the day side and darkening to the night side.
+
+## The overview views
+
+`out/` also holds six views as glTF files (`.glb`), each centred and scaled to 150 units, with a GameApi script of the same name (`.txt`): `route-planets` (1977 to 1989), `route-whole` (to 2026) and the four flybys in the planet's own frame with the planet and moons to scale. The blue line is the simulated trajectory; planet orbits are grey, moon orbits orange. From `out/`:
 
 ```
-LD_LIBRARY_PATH=../GameApi/GameApi ../GameApi/GameApi/cmdline/gameapi_cmdline --file neptune.txt
+SDL_VIDEO_X11_FORCE_EGL=1 LD_LIBRARY_PATH=../GameApi/GameApi ../GameApi/GameApi/cmdline/gameapi_cmdline --file neptune.txt
 ```
-
-GameApi's world reaches about 1000 units either way; the views are scaled to 300 so that they sit inside its default camera.
-
-The `.glb` files are checked to be well-formed glTF 2.0. They and the scripts have not yet been opened in GameApi: the scripts are written from GameApi's own examples and may need a correction. Building GameApi on Ubuntu needs `libsdl2-dev`, `libsdl2-mixer-dev`, `libglew-dev`, `libfreetype-dev` and `libopencv-dev` (its own README does not list the last one), then `make -j 8 depbuild` in `GameApi/GameApi`. The scripts load the views as local files from the folder GameApi is started in.
 
 ## Files
 
 | | |
 |---|---|
-| `voyager2.cpp` | the simulation: the legs, the comparison, the glTF writer |
+| `voyager2.cpp` | the simulation: the legs, the comparison, the glTF writer, the game's data |
+| `game.cpp`, `play.sh` | the game, on GameApi |
 | `orbit/orbit.hpp` | the orbit library (a copy; one header, no dependencies) |
-| `data/` | 38 vector tables from NASA JPL Horizons |
-| `fetch.sh` | fetches `data/` again from Horizons |
-| `models/voyager-probe-a.glb` | NASA's 3D model of the spacecraft |
-| `GameApi/` | the viewer, as a git submodule |
-| `run.sh` | builds and runs |
+| `data/` | 38 vector tables from NASA JPL Horizons; `fetch.sh` fetches them again |
+| `textures/` | surface maps and the star map; `fetch-textures.sh` fetches and prepares them again |
+| `models/probe/` | NASA's Voyager model in three plain glTF parts; `tools/undraco.py` made them from `models/voyager-probe-b.glb` |
+| `screens/` | pictures from the game |
+| `GameApi/` | the engine, as a git submodule |
+| `run.sh` | builds and runs the simulation |
 
 ## Not in the model
 
@@ -151,5 +168,8 @@ Thrust, radiation and heat recoil, flattening beyond J2, rings and small moons, 
 
 - Trajectory of Voyager 2 and positions of the Sun, planets and moons: NASA JPL Horizons (`ssd.jpl.nasa.gov/horizons`), fetched 2026-11-15. Masses from the same service.
 - Planet poles: IAU working group on cartographic coordinates. Flattening (J2) with its reference radius: published gravity fields of the planets. Both are written out in `voyager2.cpp`.
-- Spacecraft model: NASA 3D Resources (`github.com/nasa/NASA-3D-Resources`, "Voyager Probe (A)"), which NASA describes as free and without copyright.
+- Spacecraft model: NASA 3D Resources (`github.com/nasa/NASA-3D-Resources`, "Voyager Probe (B)"), which NASA describes as free and without copyright; unpacked from its mesh compression for GameApi.
+- Moon maps: NASA 3D Resources, "Images and Textures", the same terms.
+- Planet, Sun and ring maps in visible light: Solar System Scope (`solarsystemscope.com/textures`), licence CC BY 4.0, made from NASA data.
+- Star map: NASA Scientific Visualization Studio, Deep Star Maps 2020 (`svs.gsfc.nasa.gov/4851`), from the Hipparcos, Tycho and Gaia catalogues.
 - GameApi: by its author, under its own licence (GPL and LGPL), used here with the author's consent.
