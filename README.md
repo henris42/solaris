@@ -169,7 +169,16 @@ On the screen, besides the picture:
 
 True to life: the direction and apparent size of every body at every moment (from the simulation), the stars (the Hipparcos catalogue: each star a dot at its measured place, as bright as measured, with a hint of its measured colour; 8 870 stars to magnitude 6.5 for the eye, to magnitude 8 and 9 through the cameras; one star field serves all four planets, with every star where it was in 1984), the planets in visible light, which side of each body is in sunlight, the planet's turning, Saturn's rings, the spacecraft's shape and surface with its dish toward the Earth and the sunlight on it (the dish's open face lit, the far side and what lies in the dish's shadow not), the fields of its two cameras: a camera magnifies the whole picture, stars included, so through the narrow-angle camera there is seldom a star in view.
 
-Not true to life: time; the Sun, drawn at least a fifth of a degree wide (and plain white); the unlit side of everything, which in space is black and here keeps a fifth of its brightness so that it can be seen; no shadows of one body on another (of Saturn on its rings, of a planet on a moon); the moons' maps are not turned to the face each moon really showed; how the spacecraft is rolled about its dish; sunlight on the spacecraft comes from where the Earth is (from out there the two are a few degrees apart); the brightness of the stars is squeezed into what a screen can show. GameApi's own camera is a long lens, 17 degrees from top to bottom.
+Not true to life: time; the Sun, drawn at least a fifth of a degree wide (and plain white); the unlit side of everything, which in space is black and here keeps a fifth of its brightness so that it can be seen; no shadows of one body on another (of Saturn on its rings, of a planet on a moon); the moons' maps are not turned to the face each moon really showed; parts of some moons are made up (see below); how the spacecraft is rolled about its dish; sunlight on the spacecraft comes from where the Earth is (from out there the two are a few degrees apart); the brightness of the stars is squeezed into what a screen can show. GameApi's own camera is a long lens, 17 degrees from top to bottom.
+
+Made-up ground. Nobody has seen all of these moons: Voyager 2 passed Uranus's moons and Triton with their northern parts in the dark, and no spacecraft has been back. Where a map is black for that reason, the game does not show a hole: `tools/fill.cpp` fills it with ground made to look like the part that was seen. It takes the seen surface's brightness (the same distribution), its colours (each brightness gets the colour the seen surface has there) and its roughness (which sets the fractal dimension), and makes fractal noise on the sphere plus craters whose number falls with the square of their size, each drawn as light falls on a bowl with a rim. It is a guess, not a map:
+
+| | made up |
+|---|---|
+| Miranda, Ariel, Umbriel, Titania, Oberon | about 60 % of each: the northern half |
+| Triton | 39 %: the north |
+| Europa, Ganymede, Callisto | 5 % each: strips at the poles |
+| Io, Titan, Saturn's moons | nothing |
 
 It has been played by hand (the scene keys worked) and otherwise run on a virtual screen, where these pictures were taken. The first picture takes some ten seconds (GameApi reads the stars); another planet then comes in under a second.
 
@@ -197,6 +206,7 @@ SDL_VIDEO_X11_FORCE_EGL=1 LD_LIBRARY_PATH=../GameApi/GameApi ../GameApi/GameApi/
 | `orbit/orbit.hpp` | the orbit library (a copy; one header, no dependencies) |
 | `data/` | 38 vector tables from NASA JPL Horizons, the stars to magnitude 9 (`stars.txt`) and Voyager 2's picture record (`shots_*.txt`); `fetch.sh` fetches them again |
 | `textures/` | surface maps; `fetch-textures.sh` fetches and prepares them again |
+| `tools/fill.cpp` | makes up the unseen parts of the moons' maps |
 | `models/probe/` | NASA's Voyager model in three plain glTF parts, each with its texture; `tools/undraco.py` made them from `models/voyager-probe-b.glb` and put the sunlight in |
 | `screens/` | pictures from the game |
 | `GameApi/` | the engine, as a git submodule |
@@ -211,7 +221,7 @@ Thrust, radiation and heat recoil, flattening beyond J2, rings and small moons, 
 - Trajectory of Voyager 2 and positions of the Sun, planets and moons: NASA JPL Horizons (`ssd.jpl.nasa.gov/horizons`), fetched 2026-11-15. Masses from the same service.
 - Planet poles: IAU working group on cartographic coordinates. Flattening (J2) with its reference radius: published gravity fields of the planets. Both are written out in `voyager2.cpp`.
 - Spacecraft model: NASA 3D Resources (`github.com/nasa/NASA-3D-Resources`, "Voyager Probe (B)"), which NASA describes as free and without copyright; unpacked from its mesh compression for GameApi.
-- Moon maps: NASA 3D Resources, "Images and Textures", the same terms. Two are not as NASA's files have them. Io is the U.S. Geological Survey's global mosaic (Galileo colour over Galileo and Voyager detail, public domain, `astrogeology.usgs.gov`); its colours come from Galileo's violet, green and near-infrared filters, and to the eye Io is the same but paler. Titan is NASA's map brought from a strong red-orange to the tan-orange of Titan's haze in visible light.
+- Moon maps. Io, Europa, Ganymede, Callisto and Triton: the U.S. Geological Survey's global mosaics from Galileo and Voyager pictures (public domain, `astrogeology.usgs.gov`). Io's colours come from Galileo's violet, green and near-infrared filters (to the eye Io is the same but paler); Europa and Callisto are grey mosaics given one tint each; Triton's colours are the mosaic's own, which are stretched. Mimas, Enceladus, Tethys, Dione, Rhea and Iapetus: the Cassini maps of 2014 (NASA/JPL-Caltech/Space Science Institute/Lunar and Planetary Institute, PIA18434 to PIA18439), their stretched colours brought down to the near white of ice and brightened. Titan and Uranus's five moons: NASA 3D Resources, "Images and Textures", the same terms as the spacecraft model; Titan brought from a strong red-orange to the tan-orange of its haze in visible light. Unseen parts are made up, as said above.
 - Planet and ring maps in visible light: Solar System Scope (`solarsystemscope.com/textures`), licence CC BY 4.0, made from NASA data.
 - Stars: the Hipparcos catalogue (ESA, 1997; CDS catalogue I/239), every star to magnitude 9: position, proper motion, parallax, brightness and colour.
 - What Voyager 2 photographed: NASA Planetary Data System, Ring-Moon Systems Node, OPUS (`opus.pds-rings.seti.org`), the Voyager ISS image record: time, camera, target and pointing of each picture.
