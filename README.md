@@ -128,6 +128,21 @@ Time runs slowly near things and fast between them, without steps: the planet gr
 
 These distances come out of the simulation; the terminal lists them with their dates when a tour starts.
 
+### What Voyager 2 photographed
+
+`a` switches to the autonomous view: the picture follows Voyager 2's own. NASA's Planetary Data System keeps the record of every picture its two cameras took (Ring-Moon Systems Node, `opus.pds-rings.seti.org`): the time, the camera, what it was aimed at and where in the sky the camera pointed. During the days of the four scenes that is 7 764 pictures (`data/shots_<planet>.txt`). The view goes to where the camera pointed for each picture in turn, through the camera that took it (softened a little so that the eye can follow; the amber corners are the edges of the square picture), and the panel names the target and counts the pictures. `a` again, or picking a body, returns to the tour's view.
+
+This is also a check on everything at once (the simulation, the frames of the planets, the clocks): the record is NASA's, the positions of the bodies are the simulation's. Of the pictures aimed at a body of the scenes, the body is inside the picture where the simulation puts it in:
+
+| | pictures aimed at a body of the scene | with the body in the picture |
+|---|---|---|
+| Jupiter | 3 525 | 3 449 |
+| Saturn | 1 089 | 1 082 |
+| Uranus | 757 | 728 |
+| Neptune | 864 | 830 |
+
+The rest are not looked into (pictures of a limb, of rings recorded under the planet's name, or misses).
+
 On the screen, besides the picture:
 
 - top left, what the spacecraft is doing: the date, its distance from the planet's centre and above its cloud tops, its speed past the planet, how fast time runs, what the picture is seen through, and the body the tour is on;
@@ -144,6 +159,7 @@ On the screen, besides the picture:
 | `1` to `9` | time at one rate: `1` is real time, then 10, 30, 100, 300, 1 000, 3 000, 10 000 and 30 000 times |
 | `t` or `0` | time at the tour's own pace again |
 | `+` `-`, space | faster, slower; pause |
+| `a` | autonomous: follow what Voyager 2 photographed (see above) |
 | `z` | by eye, wide-angle camera, narrow-angle camera |
 | `v`, `m`, `i` | the spacecraft, the maps, the data panels: on or off |
 | `j` `s` `u` `n` | Jupiter, Saturn, Uranus, Neptune |
@@ -155,7 +171,9 @@ True to life: the direction and apparent size of every body at every moment (fro
 
 Not true to life: time; the Sun, drawn at least a fifth of a degree wide (and plain white); the unlit side of everything, which in space is black and here keeps a fifth of its brightness so that it can be seen; no shadows of one body on another (of Saturn on its rings, of a planet on a moon); the moons' maps are not turned to the face each moon really showed; how the spacecraft is rolled about its dish; sunlight on the spacecraft comes from where the Earth is (from out there the two are a few degrees apart); the brightness of the stars is squeezed into what a screen can show. GameApi's own camera is a long lens, 17 degrees from top to bottom.
 
-It has been played by hand (the scene keys worked) and otherwise run on a virtual screen, where these pictures were taken. The first picture takes some ten seconds (GameApi reads the stars); another planet then comes in under a second. About one start in ten fails: the window stays black, or the program stops with an out-of-memory error after a few seconds. The cause is not found; starting again helps. Keys, clicks and drags are tested on the virtual screen with made-up events (`-DGAME_TEST`, see the top of `game.cpp`).
+It has been played by hand (the scene keys worked) and otherwise run on a virtual screen, where these pictures were taken. The first picture takes some ten seconds (GameApi reads the stars); another planet then comes in under a second.
+
+A note on starting. About one start in ten used to fail: the window stayed black at "loading", or the program stopped with an out-of-memory error after a few seconds. The black window is a deadlock inside GameApi: it reads models on several threads, and in the stuck program every thread, the main one included, was asleep waiting for another (seen with `ps -L`: all in `futex_do_wait`; the last lines of GameApi's own output were `Progressbar: ... join_id`). That is in the engine, and the engine is not changed here. The game works around it: a watch on the side starts the program afresh when no picture has been drawn for 45 seconds, or when it is about to stop on an error within two minutes of its start, three times at most (`start_afresh` in `game.cpp`). The restart itself has not yet been seen to happen in a test. Keys, clicks and drags are tested on the virtual screen with made-up events (`-DGAME_TEST`, see the top of `game.cpp`).
 
 Building GameApi on Ubuntu: `sudo apt-get install libsdl2-dev libsdl2-mixer-dev libglew-dev libfreetype-dev libopencv-dev` (its own README does not list the last one), then `make -j 8 depbuild` in `GameApi/GameApi`. GameApi asks for an antialiased window, which some X servers give only through EGL; `play.sh` sets `SDL_VIDEO_X11_FORCE_EGL=1` for that.
 
@@ -177,7 +195,7 @@ SDL_VIDEO_X11_FORCE_EGL=1 LD_LIBRARY_PATH=../GameApi/GameApi ../GameApi/GameApi/
 | `game.cpp`, `play.sh` | the game, on GameApi |
 | `panels.hpp`, `glyphs.hpp` | flat drawing over the picture (boxes, lines, text) and its letters; `tools/font.sh` wrote the letters |
 | `orbit/orbit.hpp` | the orbit library (a copy; one header, no dependencies) |
-| `data/` | 38 vector tables from NASA JPL Horizons and the stars to magnitude 9 (`stars.txt`); `fetch.sh` fetches them again |
+| `data/` | 38 vector tables from NASA JPL Horizons, the stars to magnitude 9 (`stars.txt`) and Voyager 2's picture record (`shots_*.txt`); `fetch.sh` fetches them again |
 | `textures/` | surface maps; `fetch-textures.sh` fetches and prepares them again |
 | `models/probe/` | NASA's Voyager model in three plain glTF parts, each with its texture; `tools/undraco.py` made them from `models/voyager-probe-b.glb` and put the sunlight in |
 | `screens/` | pictures from the game |
@@ -196,6 +214,7 @@ Thrust, radiation and heat recoil, flattening beyond J2, rings and small moons, 
 - Moon maps: NASA 3D Resources, "Images and Textures", the same terms. Two are not as NASA's files have them. Io is the U.S. Geological Survey's global mosaic (Galileo colour over Galileo and Voyager detail, public domain, `astrogeology.usgs.gov`); its colours come from Galileo's violet, green and near-infrared filters, and to the eye Io is the same but paler. Titan is NASA's map brought from a strong red-orange to the tan-orange of Titan's haze in visible light.
 - Planet and ring maps in visible light: Solar System Scope (`solarsystemscope.com/textures`), licence CC BY 4.0, made from NASA data.
 - Stars: the Hipparcos catalogue (ESA, 1997; CDS catalogue I/239), every star to magnitude 9: position, proper motion, parallax, brightness and colour.
+- What Voyager 2 photographed: NASA Planetary Data System, Ring-Moon Systems Node, OPUS (`opus.pds-rings.seti.org`), the Voyager ISS image record: time, camera, target and pointing of each picture.
 - Letters on the screen: DejaVu Sans Mono (Bitstream Vera licence), as small pictures in `glyphs.hpp`.
 - GameApi: by its author, under its own licence (GPL and LGPL), used here with the author's consent.
 

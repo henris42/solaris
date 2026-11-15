@@ -58,3 +58,25 @@ curl -s -m 600 -A "curl" -L -o hip_main.dat "https://vizier.cfa.harvard.edu/ftp/
 awk -F'|' '$9 !~ /^ *$/ && $6 !~ /^ *$/ && $6+0 <= 9.0 { printf "%.5f %.5f %.2f %.2f %.1f %.1f %.1f\n", $9, $10, $6, ($38 ~ /^ *$/ ? 0.6 : $38), $13, $14, $12 }' hip_main.dat > stars.txt
 rm hip_main.dat
 printf "%-16s %5s stars\n" stars.txt "$(wc -l < stars.txt)"
+
+# ---- what Voyager 2 photographed: its image record from the Ring-Moon Systems Node ----
+# (NASA Planetary Data System, opus.pds-rings.seti.org; public). data/shots_<planet>.txt:
+# one line for each picture taken during the days of the scene and pointed at the sky:
+# time (UTC), right ascension and declination of the middle of the picture (degrees,
+# as the camera pointed), camera (N narrow-angle, W wide-angle), target as recorded.
+shots() {  # shots <Planet> <first day> <day after the last> <file>
+  curl -s -m 600 -A "curl" -G "https://opus.pds-rings.seti.org/opus/api/data.csv" \
+    --data-urlencode "instrument=Voyager ISS" --data-urlencode "insthost=Voyager 2" --data-urlencode "planet=$1" \
+    --data-urlencode "cols=time1,target,VGISScamera,rightasc1,rightasc2,declination1,declination2" \
+    --data-urlencode "order=time1" --data-urlencode "limit=30000" -o shots.csv
+  awk -F, -v a="$2" -v b="$3" 'NR > 1 && $1 >= a && $1 < b && $4 != "N/A" && $3 != "N/A" {
+      ra = ($4 + $5) / 2; if ($5 - $4 > 180 || $5 < $4) { ra += 180; if (ra >= 360) ra -= 360 }
+      t = $2; gsub(/ /, "_", t)
+      printf "%s %.4f %.4f %s %s\n", $1, ra, ($6 + $7) / 2, substr($3, 1, 1), t }' shots.csv > "$4"
+  rm shots.csv
+  printf "%-16s %5s pictures\n" "$4" "$(wc -l < "$4")"
+}
+shots Jupiter 1979-07-05 1979-07-14 shots_jupiter.txt
+shots Saturn  1981-08-22 1981-08-30 shots_saturn.txt
+shots Uranus  1986-01-21 1986-01-28 shots_uranus.txt
+shots Neptune 1989-08-22 1989-08-28 shots_neptune.txt

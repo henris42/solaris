@@ -10,6 +10,8 @@
 //   , .                   to the previous, the next flyby
 //   1 to 9                time at one rate: 1 real time, then 10, 30, 100 ... 9 is 30 000 times
 //   t (or 0)              time at the tour's own pace again       + -   faster, slower       space   pause
+//   a                     autonomous: the view follows Voyager's own pictures, one after the other: where its
+//                         camera pointed, through the camera that took each (NASA's record of all of them)
 //   z                     by eye, through Voyager's wide-angle camera (3.2 degrees), through its narrow-angle camera (0.42 degrees)
 //   v, m, i               the spacecraft, the maps, the data panels: on or off
 //   j s u n               Jupiter, Saturn, Uranus, Neptune       r   start of the scene       Esc   quit
@@ -42,15 +44,20 @@
 //                ./play.sh <planet> <hours from the nearest approach> [speed, default 600]   without it
 //                ./play.sh <planet> <moon> [speed]                                           at that moon's nearest approach
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <span>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
+
+#include <unistd.h>
 
 #include "panels.hpp"
 
@@ -130,6 +137,10 @@ struct scene {
   std::vector<double> near_body;
   std::vector<double> played;         // seconds of the tour gone by at each epoch
   std::vector<double> turns;          // when the tour's sight passes from one flyby to the next
+  // what Voyager 2 photographed (data/shots_<planet>.txt): when, where the camera
+  // pointed (a direction in the game's axes), with which camera, and at what
+  struct shot { double t; vec3 dir; bool narrow; std::string target; };
+  std::vector<shot> shots;
   GameApi::ML ml{};                   // the bodies
   GameApi::M sky{};                   // turns the stars from celestial axes into this planet's
   std::vector<GameApi::MN> rings;     // Saturn's
@@ -201,6 +212,55 @@ bool read_scene(const std::string& file, scene& s) {
     s.turns.push_back(static_cast<double>(j) * s.step);
   }
   return !s.bodies.empty();
+}
+
+// Voyager 2's pictures during the scene. Times in the file are UTC; the scene runs
+// on the time of the ephemeris (TDB), which was ahead of UTC by 50 to 56 seconds.
+void read_shots(const std::string& file, scene& s) {
+  const auto days = [](int y, int m, int d) {  // days from a fixed day, by the calendar
+    y -= m <= 2;
+    const int era = (y >= 0 ? y : y - 399) / 400, yoe = y - era * 400, doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    return era * 146097L + yoe * 365L + yoe / 4 - yoe / 100 + doy;
+  };
+  int y0 = 0, d0 = 0, h0 = 0, mi0 = 0;
+  char mon[8] = "";
+  std::sscanf(s.start_date.c_str(), " %d-%3s-%d %d:%d", &y0, mon, &d0, &h0, &mi0);
+  const char* months = "JanFebMarAprMayJunJulAugSepOctNovDec";
+  const char* at = std::strstr(months, mon);
+  const int m0 = at ? static_cast<int>(at - months) / 3 + 1 : 1;
+  const double ahead = y0 < 1980 ? 50.184 : y0 < 1982 ? 52.184 : y0 < 1988 ? 55.184 : 56.184;
+  std::ifstream f(file);
+  std::string when, camera, target;
+  double ra = 0.0, dec = 0.0;
+  while (f >> when >> ra >> dec >> camera >> target) {
+    int y = 0, m = 0, d = 0, h = 0, mi = 0;
+    double sec = 0.0;
+    if (std::sscanf(when.c_str(), "%d-%d-%dT%d:%d:%lf", &y, &m, &d, &h, &mi, &sec) != 6) continue;
+    const double t = static_cast<double>(days(y, m, d) - days(y0, m0, d0)) * 86400.0 + (h - h0) * 3600.0 + (mi - mi0) * 60.0 + sec + ahead;
+    const double a = ra * kPi / 180.0, b = dec * kPi / 180.0;
+    const vec3 sky{std::cos(b) * std::cos(a), std::cos(b) * std::sin(a), std::sin(b)};  // celestial axes
+    const double* fr = s.frame;                                                         // into the planet's, then into the game's (x, z, -y)
+    const vec3 p{fr[0] * sky.x + fr[1] * sky.y + fr[2] * sky.z, fr[3] * sky.x + fr[4] * sky.y + fr[5] * sky.z, fr[6] * sky.x + fr[7] * sky.y + fr[8] * sky.z};
+    for (char& ch : target) if (ch == '_') ch = ' ';
+    s.shots.push_back({t, {p.x, p.z, -p.y}, camera == "N", target});
+  }
+  // A check on everything at once (the simulation, the frames, the clocks): in how
+  // many of the pictures of a body of the scene is that body, where the simulation
+  // has it, inside the picture? A picture is 0.42 or 3.2 degrees square.
+  std::size_t aimed = 0, inside = 0;
+  for (const scene::shot& k : s.shots)
+    for (const body& b : s.bodies) {
+      if (b.name != k.target) continue;
+      const auto at = glass::orbit::state_at(std::span<const orbit_sample>(b.path), k.t, 8);
+      if (!at) continue;
+      const vec3 d = (1.0 / glass::orbit::norm(at->pos)) * at->pos;
+      const double apart = std::acos(std::clamp(d.x * k.dir.x + d.z * k.dir.y - d.y * k.dir.z, -1.0, 1.0)) * 180.0 / kPi;
+      const double disc = std::asin(std::min(1.0, b.radius / glass::orbit::norm(at->pos))) * 180.0 / kPi;
+      ++aimed;
+      if (apart < disc + (k.narrow ? 0.30 : 2.24)) ++inside;  // the disc reaches into the picture (half its diagonal)
+    }
+  std::printf("%s: %zu pictures by Voyager 2; of %zu aimed at a body of the scene, %zu have it in the picture where the simulation puts it\n", s.planet.c_str(), s.shots.size(),
+              aimed, inside);
 }
 
 // seconds of play for a second of flight, at a moment of the tour
@@ -290,7 +350,8 @@ int planet_at(const panels& ui, float px, float py) {
   return -1;
 }
 
-void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused, std::size_t target, double zoom, bool data, bool map, double tour_at) {
+void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused, std::size_t target, double zoom, bool data, bool map, double tour_at, const scene::shot* shot,
+                 std::size_t shot_number) {
   ui.start();
   const auto W = static_cast<float>(ui.width), H = static_cast<float>(ui.height);
   const body& planet = c.bodies[0];
@@ -310,7 +371,13 @@ void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused,
     std::snprintf(b, sizeof b, "x %.0f", rate);
     rows.push_back({"time runs", paused ? "paused" : rate < 1.5 ? "as it did (x 1)" : b});
     rows.push_back({"seen", zoom > 10.0 ? "narrow-angle camera, 0.42 deg" : zoom > 1.0 ? "wide-angle camera, 3.2 deg" : "by eye, beside the spacecraft"});
-    if (target < c.bodies.size()) rows.push_back({"looking at", c.bodies[target].name});
+    if (shot) {  // following Voyager's own pictures
+      rows.push_back({"Voyager photographs", shot->target});
+      std::snprintf(b, sizeof b, "%s of %s", km(static_cast<double>(shot_number)).c_str(), km(static_cast<double>(c.shots.size())).c_str());
+      rows.push_back({"picture", b});
+    } else if (target < c.bodies.size()) {
+      rows.push_back({"looking at", c.bodies[target].name});
+    }
     if (tour_at >= 0.0) {
       std::snprintf(b, sizeof b, "%d:%02d of 3:00", static_cast<int>(tour_at) / 60, static_cast<int>(tour_at) % 60);
       rows.push_back({"tour", b});
@@ -349,6 +416,14 @@ void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused,
       ui.text(col[2] - panels::text_width(near), y, near, kMuted);
       ui.text(col[3] - panels::text_width(when), y, when, m.nearest_t > t ? ink : kMuted);
     }
+    if (shot) {  // the corners of the picture Voyager took: its cameras' pictures were square
+      const float side = static_cast<float>(ui.height) - 8.0f, x0 = (W - side) / 2, y0 = 4.0f, arm = 28.0f;
+      for (int k = 0; k < 4; ++k) {
+        const float x = x0 + (k % 2 ? side : 0.0f), y = y0 + (k / 2 ? side : 0.0f), dx = k % 2 ? -arm : arm, dy = k / 2 ? -arm : arm;
+        ui.line(x, y, x + dx, y, 1.5f, kAmber);
+        ui.line(x, y, x, y + dy, 1.5f, kAmber);
+      }
+    }
     // the planets, to click on
     for (int i = 0; i < 4; ++i) {
       float x = 0, y = 0, w = 0, h = 0;
@@ -360,7 +435,7 @@ void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused,
     }
     // the keys
     const char* keys[4] = {"drag: turn about the spacecraft   wheel: nearer, farther   c: back", "click a name, or Tab: look at it   , . previous, next flyby   f: the planet",
-                           "1-9: speed (1 real time, 9 fastest)   t: the tour's pace   space: pause", "z: camera   v: spacecraft   m: map   i: data   j s u n: planets   Esc"};
+                           "1-9: speed (1 real time)   t: tour pace   space: pause   a: Voyager's own pictures", "z: camera   v: spacecraft   m: map   i: data   j s u n: planets   Esc"};
     for (int i = 0; i < 4; ++i) ui.text(W - 16 - panels::text_width(keys[i]), H - 16 - lh * static_cast<float>(4 - i), keys[i], kMuted);
     ui.draw();
   }
@@ -455,7 +530,38 @@ void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused,
 
 }  // namespace
 
+// GameApi reads models on several threads, and about one start in ten these wait
+// for each other for ever (or one runs out of memory). A watch on the side starts
+// the program afresh when no picture has been drawn for 45 seconds, or when the
+// program is about to stop on an error soon after its start; three times at most.
+std::atomic<long> g_drawn{0};  // when the last picture was drawn, seconds on the steady clock
+char** g_args = nullptr;
+long seconds_now() { return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+void start_afresh(const char* why) {
+  const char* tries = std::getenv("VOYAGER_STARTS");
+  const int n = tries ? std::atoi(tries) : 0;
+  if (n >= 3) {
+    std::fprintf(stderr, "\n%s, three times over: giving up\n", why);
+    std::_Exit(1);
+  }
+  std::fprintf(stderr, "\n%s: starting afresh\n", why);
+  setenv("VOYAGER_STARTS", std::to_string(n + 1).c_str(), 1);
+  execv("/proc/self/exe", g_args);
+  std::_Exit(1);
+}
+
 int main(int argc, char** argv) {
+  g_args = argv;
+  g_drawn = seconds_now();
+  const long started = seconds_now();
+  std::set_terminate([] { start_afresh("the program stopped on an error"); });
+  std::thread([started] {
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      if (seconds_now() - g_drawn > 45) start_afresh("no picture for 45 seconds (GameApi's loading has stalled)");
+      if (seconds_now() - started > 120) std::set_terminate(nullptr);  // later errors are not the start's
+    }
+  }).detach();
   const std::string home = argc > 2 ? argv[2] : ".";
   const std::string names[4] = {"jupiter", "saturn", "uranus", "neptune"};
   int current = 3;
@@ -468,6 +574,7 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "no scene %s/out/%s.scene: run ./run.sh first\n", home.c_str(), names[i].c_str());
       return 1;
     }
+  for (int i = 0; i < 4; ++i) read_shots(home + "/data/shots_" + names[i] + ".txt", scenes[i]);
 
   g_main_thread_id = pthread_self();  // as GameApi's own runner does before anything else
   tasks_init();
@@ -611,6 +718,11 @@ int main(int argc, char** argv) {
   // and the mouse turns only the spacecraft, which is drawn beside the picture.
   std::size_t focus = 0, tour_sight = none;
   bool own_lens = false;    // the camera picked by hand: holds until the focus changes
+  // Autonomous: the view is Voyager's own. It goes where the camera pointed for each
+  // picture it took, through the camera that took it, a little softened so that the
+  // eye can follow; the camera changes at most once a second.
+  bool autonomous = false;
+  double lens_held = 0.0;
   double zoom = 1.0;        // 1: the eye beside the spacecraft; 5.4 and 40: through its wide-angle and narrow-angle cameras
   double aim_yaw = 0.0, aim_pitch = 0.0, from_yaw = 0.0, from_pitch = 0.0, swing = 1.0;
   double off_yaw = 0.1, off_pitch = 0.0, glide_yaw = 0.0, glide_pitch = 0.0;
@@ -619,18 +731,19 @@ int main(int argc, char** argv) {
   bool drag = false;
   float last_x = 0.0f, last_y = 0.0f;
   // the turns that bring a body straight ahead
-  const auto toward = [&](const body& b, double& yaw, double& pitch) {
-    const auto at = glass::orbit::state_at(std::span<const orbit_sample>(b.path), t, 8);
-    if (!at) return;
-    const vec3 d = to_view((1.0 / glass::orbit::norm(at->pos)) * at->pos);
-    const double a = std::atan2(-d.x, -d.z);                      // about y: brings the body into the y-z plane, ahead
+  const auto ahead = [](vec3 d, double& yaw, double& pitch) {    // a direction in the game's axes
+    const double a = std::atan2(-d.x, -d.z);                      // about y: brings it into the y-z plane, ahead
     const double z1 = -d.x * std::sin(a) - d.z * std::cos(a);     // how far ahead it then is
     yaw = -a;                                                     // GameApi turns the other way about y
     pitch = -std::atan2(d.y, z1);
   };
+  const auto toward = [&](const body& b, double& yaw, double& pitch) {
+    const auto at = glass::orbit::state_at(std::span<const orbit_sample>(b.path), t, 8);
+    if (at) ahead(to_view((1.0 / glass::orbit::norm(at->pos)) * at->pos), yaw, pitch);
+  };
   const auto nearer = [](double to, double from) { return std::remainder(to - from, 2.0 * kPi); };  // the short way round
   const auto look_at = [&](std::size_t i) {  // swing over to another body
-    if (i == focus) return;
+    if (i == focus && !autonomous) return;
     focus = i;
     from_yaw = aim_yaw, from_pitch = aim_pitch, swing = 0.0;
     own_lens = false;
@@ -653,6 +766,7 @@ int main(int argc, char** argv) {
       for (const GameApi::ML& field : stars) ev.mainloop_api.execute_ml(ev, field, sh, sh2, sh2, sh3, still, still, still, w, h);
       ev.mainloop_api.execute_ml(ev, s.ml, sh, sh2, sh2, sh3, still, still, still, w, h);
       std::printf("loaded in %.1f s\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+      g_drawn = seconds_now();
     }
     t = tour ? 0.0 : std::max(0.0, s.bodies[0].nearest_t + start_hours * 3600.0);
     focus = 0;
@@ -695,13 +809,18 @@ int main(int argc, char** argv) {
         if (e.ch == 'i') show_data = !show_data;
         if (e.ch == 'z') { zoom = zoom < 2.0 ? 5.4 : zoom < 10.0 ? 40.0 : 1.0; own_lens = true; }
         if (e.ch == 'c') homing = true;
+        if (e.ch == 'a') {
+          autonomous = !autonomous;
+          if (!autonomous) from_yaw = aim_yaw, from_pitch = aim_pitch, swing = 0.0, own_lens = false;  // swing back to the tour's sight
+        }
         if (e.ch == ' ') paused = !paused;
         if (e.ch == 'r') t = 0.0;
-        if (e.ch == 'f') look_at(0);
+        if (e.ch == 'f') { look_at(0); autonomous = false; }
         if (e.ch == 9) {  // Tab: the next body in the list
           std::size_t k = 0;
           while (k < c.flybys.size() && c.flybys[k] != focus) ++k;
           look_at(c.flybys[(k + 1) % c.flybys.size()]);
+          autonomous = false;
         }
         if (e.ch == '.' || e.ch == ',') {  // to the next or the previous flyby, a little before its nearest
           std::size_t to = none;
@@ -723,7 +842,7 @@ int main(int argc, char** argv) {
         const std::size_t picked = show_data && ui_ok ? body_at(ui, c, x, y) : none;
         const int planet = show_data && ui_ok ? planet_at(ui, x, y) : -1;
         if (planet >= 0) { if (planet != current) enter(planet); }
-        else if (picked != none) look_at(picked);
+        else if (picked != none) { look_at(picked); autonomous = false; }
         else { drag = true; homing = false; glide_yaw = glide_pitch = 0.0; last_x = x; last_y = y; }
       }
       if (e.type == 0x402) drag = false;
@@ -745,8 +864,9 @@ int main(int argc, char** argv) {
       const std::size_t see = sight(c, t);
       if (see != tour_sight) {  // the tour moves on: the view goes with it
         tour_sight = see;
-        look_at(see);
-        if (see != 0) std::printf("\n  %s: nearest %0.f km, %s\n", c.bodies[see].name.c_str(), c.bodies[see].nearest, date_at(c, c.bodies[see].nearest_t).c_str());
+        if (!autonomous) look_at(see);
+        else focus = see;
+        if (see != 0 && !autonomous) std::printf("\n  %s: nearest %0.f km, %s\n", c.bodies[see].name.c_str(), c.bodies[see].nearest, date_at(c, c.bodies[see].nearest_t).c_str());
       }
     }
     if (!paused) t += rate * dt;
@@ -757,8 +877,26 @@ int main(int argc, char** argv) {
     toward(c.bodies[focus], to_yaw, to_pitch);
     swing = std::min(1.0, swing + dt / 1.5);
     const double ease = swing * swing * (3.0 - 2.0 * swing);
-    aim_yaw = swing < 1.0 ? from_yaw + nearer(to_yaw, from_yaw) * ease : to_yaw;
-    aim_pitch = swing < 1.0 ? from_pitch + (to_pitch - from_pitch) * ease : to_pitch;
+    // Voyager's picture at this moment: the last one it took
+    const scene::shot* shot = nullptr;
+    if (autonomous && !c.shots.empty()) {
+      const auto next = std::upper_bound(c.shots.begin(), c.shots.end(), t, [](double at, const scene::shot& k) { return at < k.t; });
+      if (next != c.shots.begin()) shot = &*(next - 1);
+    }
+    lens_held += dt;
+    if (shot) {
+      double sy = aim_yaw, sp = aim_pitch;
+      ahead(shot->dir, sy, sp);
+      const double k = 1.0 - std::exp(-dt / 0.25);
+      aim_yaw += nearer(sy, aim_yaw) * k, aim_pitch += (sp - aim_pitch) * k;
+      const double lens_now = shot->narrow ? 40.0 : 5.4;
+      if (lens_now != zoom && lens_held > 1.0) zoom = lens_now, lens_held = 0.0;
+      own_lens = true;
+    } else {
+      aim_yaw = swing < 1.0 ? from_yaw + nearer(to_yaw, from_yaw) * ease : to_yaw;
+      aim_pitch = swing < 1.0 ? from_pitch + (to_pitch - from_pitch) * ease : to_pitch;
+      if (autonomous) own_lens = false;  // before Voyager's first picture of the scene: the tour's own view
+    }
     // the mouse's turn: glides on after the mouse lets go, and goes home when asked
     if (!drag) {
       off_yaw += glide_yaw * dt, off_pitch += glide_pitch * dt;
@@ -834,8 +972,16 @@ int main(int argc, char** argv) {
     glClear(GL_DEPTH_BUFFER_BIT);
     if (craft)  // in the middle by eye; to the right of the camera's picture
       ev.mainloop_api.execute_ml(ev, probe, sh, sh2, sh2, sh3, around, ev.matrix_api.trans(zoom > 1.0 ? 0.15f * eye : 0.0f, 0.0f, -eye), around, w, h);
-    if (ui_ok) draw_panels(ui, c, t, rate, paused, focus, zoom, show_data, show_map, paced ? c.played[std::min(c.played.size() - 1, static_cast<std::size_t>(t / c.step))] : -1.0);
+    std::size_t marked = focus;  // in the list: the body in view; following Voyager, the body it photographs, if it is one of the list
+    if (shot) {
+      marked = none;
+      for (std::size_t i : c.flybys) if (c.bodies[i].name == shot->target || c.bodies[i].name + " Rings" == shot->target) marked = i;
+    }
+    if (ui_ok)
+      draw_panels(ui, c, t, rate, paused, marked, zoom, show_data, show_map, paced ? c.played[std::min(c.played.size() - 1, static_cast<std::size_t>(t / c.step))] : -1.0, shot,
+                  shot ? static_cast<std::size_t>(shot - c.shots.data()) + 1 : 0);
     ev.mainloop_api.swapbuffers();
+    g_drawn = seconds_now();
 
     if (std::fabs(t - shown) > rate * 0.5 || shown < 0.0) {
       shown = t;
