@@ -618,6 +618,12 @@ int main(int argc, char** argv) {
     std::ofstream o(out + "/" + files[n] + ".scene");
     o.precision(10);
     o << "planet " << l.centre->name << " " << l.centre->radius << " " << l.centre->day << "\n";
+    {  // the planet's frame: its three axes in celestial (ICRF) axes
+      const frame axes = pole_frame(l.centre->pole_ra, l.centre->pole_dec);
+      o << "frame";
+      for (const vec3& r : {axes.x, axes.y, axes.z}) o << " " << r.x << " " << r.y << " " << r.z;
+      o << "\n";
+    }
     o << "epochs " << f.nasa.size() << " " << f.nasa[1].t - f.nasa[0].t << " " << f.nasa.front().date << "\n";
     o << "body " << l.centre->name << " " << l.centre->radius << "\n";
     for (const vec3& p : f.sim) o << -p.x / 1e3 << " " << -p.y / 1e3 << " " << -p.z / 1e3 << "\n";
@@ -642,12 +648,15 @@ int main(int argc, char** argv) {
       o << d.x / 1e3 << " " << d.y / 1e3 << " " << d.z / 1e3 << "\n";
     }
   }
-  // out/stars-<planet>-<1|2|3>.glb: the real stars, one small square each, every
-  // star where the Hipparcos catalogue (ESA 1997) has it: data/stars.txt holds
-  // right ascension, declination (degrees, ICRS, at 1991.25), V magnitude, B-V
-  // colour, proper motion (mas a year) and parallax (mas). Each star is moved back
-  // to the year of the flyby and seen from where the spacecraft was, then turned
-  // into the planet's frame. Three files: for the eye (to magnitude 6.5), and for
+  // out/stars-<1|2|3>.glb: the real stars, one small square each, every star where
+  // the Hipparcos catalogue (ESA 1997) has it: data/stars.txt holds right
+  // ascension, declination (degrees, ICRS, at 1991.25), V magnitude, B-V colour,
+  // proper motion (mas a year) and parallax (mas). Each star is moved back to 1984
+  // by its proper motion. The files are in celestial axes (x to the equinox, z to
+  // the celestial pole); the game turns them into each planet's frame, which every
+  // scene file gives. One set serves all four planets: the nearest star shifts by
+  // 22 seconds of arc between here and Neptune, the fastest by 50 between 1979 and
+  // 1989, a pixel or less by eye. Three files: for the eye (to magnitude 6.5), and for
   // the wide-angle and narrow-angle cameras (to 8 and 9), whose squares are that
   // many times smaller, since a camera magnifies them again.
   // out/star-dots.png: the dots. Eight columns of colour (blue-white to orange,
@@ -674,53 +683,38 @@ int main(int argc, char** argv) {
     star s{};
     while (f >> s.ra >> s.dec >> s.mag >> s.bv >> s.pm_ra >> s.pm_dec >> s.parallax) stars.push_back(s);
   }
-  const double year[4] = {1979.52, 1981.65, 1986.07, 1989.65};
   const double reach[3] = {6.5, 8.0, 9.0}, lens[3] = {1.0, 5.4, 40.0};
-  for (std::size_t n = 0; n < 4; ++n) {
-    const leg& l = kLegs[flyby_leg[n]];
-    const flown& f = flights[flyby_leg[n]];
-    const frame fr = pole_frame(l.centre->pole_ra, l.centre->pole_dec);
-    // the spacecraft from the Sun at its nearest to the planet, in astronomical units
-    std::size_t near = 0;
-    for (std::size_t j = 0; j < f.sim.size(); ++j) if (norm(f.sim[j]) < norm(f.sim[near])) near = j;
-    const auto sun = state_at(std::span<const orbit_sample>(f.paths[0]), f.nasa[near].t);
-    const vec3 here = (1.0 / 149597870700.0) * (f.sim[near] - (sun ? sun->pos : vec3{}));
-    for (int cam = 0; cam < 3; ++cam) {
-      part p{"stars", {1.0f, 1.0f, 1.0f}, "", 2, {}, {}, {}, {}};
-      put(p, {-1, -1, -1}, {0, 0, 1});
-      put(p, {1, 1, 1}, {0, 0, 1});
-      put(p, {-1, -1, -1}, {0, 0, 1});
-      for (std::uint32_t i : {0u, 1u, 2u}) p.idx.push_back(i);
-      const double pixel = 3.76e-4 / lens[cam];  // one pixel of the game's view, radians
-      for (const star& s : stars) {
-        if (s.mag > reach[cam]) continue;
-        const double dt = year[n] - 1991.25, mas = kPi / 180.0 / 3.6e6;
-        const double dec = s.dec * kPi / 180.0 + s.pm_dec * dt * mas;
-        const double ra = s.ra * kPi / 180.0 + s.pm_ra * dt * mas / std::cos(dec);
-        vec3 d = fr.turn({std::cos(dec) * std::cos(ra), std::cos(dec) * std::sin(ra), std::sin(dec)});
-        if (s.parallax > 0.5) {  // near enough to shift when seen from the outer planets
-          d = (206264806.0 / s.parallax) * d - here;
-          d = (1.0 / norm(d)) * d;
-        }
-        // the brighter, the larger and the more solid the dot
-        const double step = std::clamp(reach[cam] - s.mag, 0.0, 8.0);
-        const double half = (2.1 + 0.56 * step) * pixel;
-        const int row = std::clamp(static_cast<int>(8.0 * (0.3 + 0.175 * step) + 0.5), 1, 8) - 1;
-        const double edges[7] = {-0.12, 0.15, 0.45, 0.75, 1.05, 1.35, 1.7};
-        int col = 0;
-        while (col < 7 && s.bv > edges[col]) ++col;
-        vec3 e1 = cross(std::fabs(d.z) < 0.9 ? vec3{0, 0, 1} : vec3{1, 0, 0}, d);
-        e1 = (1.0 / norm(e1)) * e1;
-        const vec3 e2 = cross(d, e1);
-        const auto base = static_cast<std::uint32_t>(p.pos.size() / 3);
-        for (int k = 0; k < 4; ++k) {  // up and left, up and right, down and left, down and right, seen from inside
-          const double a = k % 2 ? -half : half, b = k < 2 ? half : -half;
-          put(p, d + a * e1 + b * e2, -1.0 * d, (col + (k % 2 ? 1.0 : 0.0)) / 8.0, (row + (k < 2 ? 0.0 : 1.0)) / 8.0);
-        }
-        for (std::uint32_t k : {0u, 1u, 2u, 1u, 3u, 2u}) p.idx.push_back(base + k);
+  for (int cam = 0; cam < 3; ++cam) {
+    part p{"stars", {1.0f, 1.0f, 1.0f}, "", 2, {}, {}, {}, {}};
+    put(p, {-1, -1, -1}, {0, 0, 1});
+    put(p, {1, 1, 1}, {0, 0, 1});
+    put(p, {-1, -1, -1}, {0, 0, 1});
+    for (std::uint32_t i : {0u, 1u, 2u}) p.idx.push_back(i);
+    const double pixel = 3.76e-4 / lens[cam];  // one pixel of the game's view, radians
+    for (const star& s : stars) {
+      if (s.mag > reach[cam]) continue;
+      const double dt = 1984.0 - 1991.25, mas = kPi / 180.0 / 3.6e6;  // the middle of the four flybys
+      const double dec = s.dec * kPi / 180.0 + s.pm_dec * dt * mas;
+      const double ra = s.ra * kPi / 180.0 + s.pm_ra * dt * mas / std::cos(dec);
+      const vec3 d{std::cos(dec) * std::cos(ra), std::cos(dec) * std::sin(ra), std::sin(dec)};
+      // the brighter, the larger and the more solid the dot
+      const double step = std::clamp(reach[cam] - s.mag, 0.0, 8.0);
+      const double half = (2.1 + 0.56 * step) * pixel;
+      const int row = std::clamp(static_cast<int>(8.0 * (0.3 + 0.175 * step) + 0.5), 1, 8) - 1;
+      const double edges[7] = {-0.12, 0.15, 0.45, 0.75, 1.05, 1.35, 1.7};
+      int col = 0;
+      while (col < 7 && s.bv > edges[col]) ++col;
+      vec3 e1 = cross(std::fabs(d.z) < 0.9 ? vec3{0, 0, 1} : vec3{1, 0, 0}, d);
+      e1 = (1.0 / norm(e1)) * e1;
+      const vec3 e2 = cross(d, e1);
+      const auto base = static_cast<std::uint32_t>(p.pos.size() / 3);
+      for (int k = 0; k < 4; ++k) {  // up and left, up and right, down and left, down and right, seen from inside
+        const double a = k % 2 ? -half : half, b = k < 2 ? half : -half;
+        put(p, d + a * e1 + b * e2, -1.0 * d, (col + (k % 2 ? 1.0 : 0.0)) / 8.0, (row + (k < 2 ? 0.0 : 1.0)) / 8.0);
       }
-      write_glb(out + "/stars-" + files[n] + "-" + std::to_string(cam + 1) + ".glb", {p});
+      for (std::uint32_t k : {0u, 1u, 2u, 1u, 3u, 2u}) p.idx.push_back(base + k);
     }
+    write_glb(out + "/stars-" + std::to_string(cam + 1) + ".glb", {p});
   }
   // out/ring.glb: Saturn's rings, flat in the planet's equator, in units of the
   // planet's radius, from the inner edge of the D ring to the F ring. The texture

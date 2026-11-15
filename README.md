@@ -113,11 +113,11 @@ The step is 5 to 20 seconds in a flyby and one to six hours in a cruise. Halving
 
 ![The four encounters](screens/all.jpg)
 
-`./play.sh [jupiter|saturn|uranus|neptune]` opens a GameApi window and plays that system's tour: three minutes with every flyby in it, of the planet and of each moon Voyager 2 passed.
+`./play.sh [jupiter|saturn|uranus|neptune]` opens a GameApi window and plays that system's tour: three minutes from arrival to departure, with every flyby in it, of the planet and of each moon Voyager 2 passed.
 
 ![The Jupiter tour](screens/tour-jupiter.jpg)
 
-Each flyby is shown at a slow rate while the body is near, and the way between flybys is run through fast. The view keeps on the body whose turn it is, through the camera Voyager would have used for it: its narrow-angle camera (0.42 degrees wide) for the far moons, its wide-angle camera (3.2 degrees) for the nearer ones, and the eye beside the spacecraft for what fills the sky.
+Time runs slowly near things and fast between them, without steps: the planet grows at an even pace on the way in (the slowness is as one over its distance), every moon gets the same share of the three minutes around its nearest approach, and the planet shrinks again behind, a crescent. The view is on the body whose flyby it is, otherwise on the planet, through the camera Voyager would use for a body of that size in the sky: its narrow-angle camera (0.42 degrees wide) while the body is small, its wide-angle camera (3.2 degrees) as it grows, and the eye beside the spacecraft for what fills the sky. The view swings from one body to the next. Through a camera the spacecraft is drawn beside the picture.
 
 | Tour | Flybys, in order, with the nearest distance from the body's centre |
 |---|---|
@@ -136,30 +136,30 @@ On the screen, besides the picture:
 
 | | |
 |---|---|
-| drag with the mouse | turn the view about the spacecraft (by eye only; through a camera the view stays on its body); it then stays where you put it until the next flyby |
-| wheel | nearer to the spacecraft, farther |
-| `1` `2` `3` `4` | Jupiter, Saturn, Uranus, Neptune |
+| drag with the mouse | turn the eye about the spacecraft; the turn glides on a little after the mouse lets go. Through a camera the picture stays on its body and only the spacecraft turns |
+| wheel, `c` | nearer to the spacecraft, farther; the eye back to where it started |
+| click a name | a planet (top middle): that system. A body in the list (top right): look at it; it holds until the tour moves on |
+| Tab, `f` | look at the next body in the list, at the planet |
+| `,` `.` | to the previous, the next flyby |
+| `1` to `9` | time at one rate: `1` is real time, then 10, 30, 100, 300, 1 000, 3 000, 10 000 and 30 000 times |
+| `t` or `0` | time at the tour's own pace again |
+| `+` `-`, space | faster, slower; pause |
 | `z` | by eye, wide-angle camera, narrow-angle camera |
-| `v` | the spacecraft in view or not |
-| `m`, `i` | the maps, the data panels: on or off |
-| `n`, `p` | next, previous flyby, facing it |
-| `f` | face the planet |
-| `+` `-` | faster, slower |
-| `t` | the tour on or off (off: time at one rate, the view where you put it) |
-| space, `r` | pause, start of the scene |
-| Esc | quit |
+| `v`, `m`, `i` | the spacecraft, the maps, the data panels: on or off |
+| `j` `s` `u` `n` | Jupiter, Saturn, Uranus, Neptune |
+| `r`, Esc | start of the scene, quit |
 
 `./play.sh saturn -14 60` starts without the tour, 14 hours before the nearest approach to Saturn at 60 times real speed; `./play.sh jupiter ganymede 1` starts at Ganymede's nearest approach in real time.
 
-True to life: the direction and apparent size of every body at every moment (from the simulation), the stars (the Hipparcos catalogue: each star a dot at its measured place, moved back to the year of the flyby by its proper motion and seen from where the spacecraft was, as bright as measured, with a hint of its measured colour; 8 870 stars to magnitude 6.5 for the eye, to magnitude 8 and 9 through the cameras), the planets in visible light, which side of each body is in sunlight, the planet's turning, Saturn's rings, the spacecraft's shape and surface with its dish toward the Earth and the sunlight on it (the dish's open face lit, the far side and what lies in the dish's shadow not), the fields of its two cameras: a camera magnifies the whole picture, stars included, so through the narrow-angle camera there is seldom a star in view.
+True to life: the direction and apparent size of every body at every moment (from the simulation), the stars (the Hipparcos catalogue: each star a dot at its measured place, as bright as measured, with a hint of its measured colour; 8 870 stars to magnitude 6.5 for the eye, to magnitude 8 and 9 through the cameras; one star field serves all four planets, with every star where it was in 1984), the planets in visible light, which side of each body is in sunlight, the planet's turning, Saturn's rings, the spacecraft's shape and surface with its dish toward the Earth and the sunlight on it (the dish's open face lit, the far side and what lies in the dish's shadow not), the fields of its two cameras: a camera magnifies the whole picture, stars included, so through the narrow-angle camera there is seldom a star in view.
 
 Not true to life: time; the Sun, drawn at least a fifth of a degree wide (and plain white); the unlit side of everything, which in space is black and here keeps a fifth of its brightness so that it can be seen; no shadows of one body on another (of Saturn on its rings, of a planet on a moon); the moons' maps are not turned to the face each moon really showed; how the spacecraft is rolled about its dish; sunlight on the spacecraft comes from where the Earth is (from out there the two are a few degrees apart); the brightness of the stars is squeezed into what a screen can show. GameApi's own camera is a long lens, 17 degrees from top to bottom.
 
-It has been played by hand (the scene keys worked) and otherwise run on a virtual screen, where these pictures were taken. About one start in ten fails: the window stays black, or the program stops with an out-of-memory error after a few seconds. The cause is not found; starting again helps.
+It has been played by hand (the scene keys worked) and otherwise run on a virtual screen, where these pictures were taken. The first picture takes some ten seconds (GameApi reads the stars); another planet then comes in under a second. About one start in ten fails: the window stays black, or the program stops with an out-of-memory error after a few seconds. The cause is not found; starting again helps. Keys, clicks and drags are tested on the virtual screen with made-up events (`-DGAME_TEST`, see the top of `game.cpp`).
 
 Building GameApi on Ubuntu: `sudo apt-get install libsdl2-dev libsdl2-mixer-dev libglew-dev libfreetype-dev libopencv-dev` (its own README does not list the last one), then `make -j 8 depbuild` in `GameApi/GameApi`. GameApi asks for an antialiased window, which some X servers give only through EGL; `play.sh` sets `SDL_VIDEO_X11_FORCE_EGL=1` for that.
 
-How the game draws, in GameApi's terms: every body is its own model with its own matrix, set anew each frame. GameApi scales each model it loads to 400 units across; the first triangle of each of our files spans the model's box so that this is exact. The stars are drawn first (three files for each planet, one for the eye and one for each camera, every star a small square with a soft dot on it), then the bodies with the eye at the spacecraft, each at a distance that keeps their order and with the size that gives its true apparent size, then the spacecraft. A camera is a scaling of the whole picture, 5.4 or 40 times. Sunlight on a body is a second ball over it, turned to the Sun, clear on the day side and darkening to the night side. Sunlight on the spacecraft is in its textures (`tools/undraco.py`). The panels and maps are drawn last, in plain OpenGL (`panels.hpp`), with letters from `glyphs.hpp`.
+How the game draws, in GameApi's terms: every body is its own model with its own matrix, set anew each frame. GameApi scales each model it loads to 400 units across; the first triangle of each of our files spans the model's box so that this is exact. The stars are drawn first (three files, one for the eye and one for each camera, every star a small square with a soft dot on it; read once and turned into each planet's frame, which GameApi does with three turns worked out and checked at the start), then the bodies with the eye at the spacecraft, each at a distance that keeps their order and with the size that gives its true apparent size, then the spacecraft. A camera is a scaling of the whole picture, 5.4 or 40 times. Sunlight on a body is a second ball over it, turned to the Sun, clear on the day side and darkening to the night side. Sunlight on the spacecraft is in its textures (`tools/undraco.py`). The panels and maps are drawn last, in plain OpenGL (`panels.hpp`), with letters from `glyphs.hpp`.
 
 ## The overview views
 
