@@ -1,0 +1,3 @@
+[submodule "GameApi"]
+	path = GameApi
+	url = https://github.com/terop2/GameApi.git
