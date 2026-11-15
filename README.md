@@ -130,7 +130,7 @@ These distances come out of the simulation; the terminal lists them with their d
 
 | | |
 |---|---|
-| drag with the mouse | look around; the view then stays where you put it until the next flyby |
+| drag with the mouse | turn the view about the spacecraft (by eye only; through a camera the view stays on its body); it then stays where you put it until the next flyby |
 | wheel | nearer to the spacecraft, farther |
 | `1` `2` `3` `4` | Jupiter, Saturn, Uranus, Neptune |
 | `z` | by eye, wide-angle camera, narrow-angle camera |

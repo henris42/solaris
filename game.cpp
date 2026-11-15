@@ -2,7 +2,7 @@
 // the planet, its moons, the Sun and the stars around it as seen from the
 // spacecraft, speeded up. Drawn with GameApi (https://github.com/terop2/GameApi).
 //
-//   drag with the mouse   look around the spacecraft
+//   drag with the mouse   turn the view about the spacecraft (by eye only; a camera stays on its body)
 //   wheel                 nearer, farther
 //   1 2 3 4               Jupiter, Saturn, Uranus, Neptune
 //   n, p                  next, previous flyby in the scene (the planet and each moon), facing it
@@ -357,9 +357,11 @@ int main(int argc, char** argv) {
         shown = -1.0;
       }
       const float x = ev.point_api.pt_x(e.cursor_pos), y = ev.point_api.pt_y(e.cursor_pos);
-      if (e.type == 0x401) { drag = true; follow = false; last_x = x; last_y = y; }
+      // dragging turns the view about the spacecraft, and only that: through a camera
+      // (the spacecraft out of view) the view stays on its body
+      if (e.type == 0x401 && zoom <= 1.0) { drag = true; follow = false; last_x = x; last_y = y; }
       if (e.type == 0x402) drag = false;
-      if (e.type == 0x400 && drag) {
+      if (e.type == 0x400 && drag && zoom <= 1.0) {
         yaw += (x - last_x) * 0.008f;
         pitch = std::clamp(pitch + (y - last_y) * 0.008f, -1.5f, 1.5f);
         last_x = x;
