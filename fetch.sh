@@ -49,3 +49,12 @@ for b in 701 702 703 704 705; do hz $b 500@799 1986-01-20 1986-01-29 '20 m' ura_
 hz -32 500@899 1989-08-22 1989-08-28 '10 m' nep_v2.txt
 for b in 10 399; do hz $b 500@899 1989-08-20 1989-08-30 '6 h' nep_$b.txt; done
 hz 801 500@899 1989-08-21 1989-08-29 '20 m' nep_801.txt
+
+# ---- the stars: the Hipparcos catalogue (ESA 1997, CDS catalogue I/239) ----
+# data/stars.txt: right ascension and declination (degrees, ICRS, epoch 1991.25),
+# V magnitude, B-V colour, proper motion in both (mas a year), parallax (mas);
+# every star to magnitude 9. The catalogue itself is 53 MB and is not kept.
+curl -s -m 600 -A "curl" -L -o hip_main.dat "https://vizier.cfa.harvard.edu/ftp/cats/I/239/hip_main.dat"
+awk -F'|' '$9 !~ /^ *$/ && $6 !~ /^ *$/ && $6+0 <= 9.0 { printf "%.5f %.5f %.2f %.2f %.1f %.1f %.1f\n", $9, $10, $6, ($38 ~ /^ *$/ ? 0.6 : $38), $13, $14, $12 }' hip_main.dat > stars.txt
+rm hip_main.dat
+printf "%-16s %5s stars\n" stars.txt "$(wc -l < stars.txt)"

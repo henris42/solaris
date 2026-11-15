@@ -2,12 +2,10 @@
 # Fetches the surface maps and makes them ready. The results are already in
 # textures/; run this only to refresh them. Needs curl and ImageMagick.
 #
-# Planets and Sun as the eye would see them (visible light): Solar System Scope
+# Planets as the eye would see them (visible light): Solar System Scope
 # (solarsystemscope.com/textures), licence CC BY 4.0, made from NASA data.
-# Stars: NASA Scientific Visualization Studio, Deep Star Maps 2020
-# (svs.gsfc.nasa.gov/4851): the real sky from the Hipparcos, Tycho and Gaia
-# catalogues, in celestial coordinates, centred at 0 h right ascension, which
-# increases to the left.
+# The Sun has no map (it is white), and the stars are not a picture: they come
+# from a catalogue (fetch.sh, data/stars.txt).
 # Moons: NASA 3D Resources (github.com/nasa/NASA-3D-Resources, "Images and
 # Textures"), which NASA describes as free and without copyright.
 set -e
@@ -26,7 +24,6 @@ sss jupiter 2k_jupiter.jpg
 sss saturn  2k_saturn.jpg
 sss uranus  2k_uranus.jpg
 sss neptune 2k_neptune.jpg
-sss sun     2k_sun.jpg 1024x512
 sss ring    2k_saturn_ring_alpha.png
 
 get() {  # get <our name> <NASA folder and file name>
@@ -37,7 +34,14 @@ get() {  # get <our name> <NASA folder and file name>
   rm "textures/$1.orig.jpg"
   printf "%-10s %s\n" "$1" "$(identify -format '%wx%h %b' "textures/$1.jpg")"
 }
-get io       "Jupiter - Io (A)"
+# Io: the U.S. Geological Survey's global mosaic (Galileo colour over Galileo and
+# Voyager detail, 1 km a pixel, public domain; 190 MB to fetch). Its colours are
+# from Galileo's violet, green and near-infrared filters: to the eye Io is the
+# same, but paler.
+curl -s -m 900 -A "Mozilla/5.0" -L -o textures/io.tif "https://planetarymaps.usgs.gov/mosaic/Io_GalileoSSI-Voyager_Global_Mosaic_ClrMerge_1km.tif"
+convert textures/io.tif -resize '4096x2048!' -colorspace sRGB -type TrueColor -strip -interlace none -quality 90 textures/io.jpg 2>/dev/null
+rm textures/io.tif
+printf "%-10s %s\n" io "$(identify -format '%wx%h %b' textures/io.jpg)"
 get europa   "Jupiter - Europa"
 get ganymede "Jupiter - Ganymede"
 get callisto "Jupiter - Callisto"
@@ -45,6 +49,9 @@ get tethys   "Saturn - Tethys"
 get dione    "Saturn - Dione"
 get rhea     "Saturn - Rhea"
 get titan    "Saturn - Titan"
+# NASA's Titan map has the right shading (the darker northern hood of 1981) in a
+# far too red orange: brought to the tan-orange of Titan's haze in visible light
+convert textures/titan.jpg -modulate 112,50,107 -strip -interlace none -quality 90 textures/titan.jpg
 get mimas    "Saturn - Mimas"
 get enceladus "Saturn - Enceladus"
 get iapetus  "Saturn - Iapetus"
@@ -56,11 +63,6 @@ get oberon   "Uranus - Oberon"
 get miranda  "Uranus - Miranda"
 
 # sunlight on a ball: black, clear where the Sun is overhead and darkening to the night
-# side (the brightness of a matt ball: the cosine of the Sun's distance from overhead)
-convert -size 4x256 xc:black -alpha set -channel A -fx "j<h/2 ? 1-pow(cos(pi*j/h),0.75) : 1" +channel textures/shade.png
-
-# the sky: NASA's star map comes with the full range of brightness (EXR); brought to 8 bits here
-curl -s -m 900 -A "Mozilla/5.0" -L -o textures/stars.exr "https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/starmap_2020_4k.exr"
-convert textures/stars.exr -evaluate multiply 2.0 -gamma 1.6 -depth 8 -strip -interlace none -quality 86 textures/stars.jpg
-rm textures/stars.exr
-printf "%-10s %s\n" stars "$(identify -format '%wx%h %b' textures/stars.jpg)"
+# side (the brightness of a matt ball: the cosine of the Sun's distance from overhead).
+# The night side keeps a fifth of its brightness, so that it can still be seen.
+convert -size 4x256 xc:black -alpha set -channel A -fx "0.8*(j<h/2 ? 1-pow(cos(pi*j/h),0.75) : 1)" +channel textures/shade.png

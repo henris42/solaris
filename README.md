@@ -128,6 +128,12 @@ Each flyby is shown at a slow rate while the body is near, and the way between f
 
 These distances come out of the simulation; the terminal lists them with their dates when a tour starts.
 
+On the screen, besides the picture:
+
+- top left, what the spacecraft is doing: the date, its distance from the planet's centre and above its cloud tops, its speed past the planet, how fast time runs, what the picture is seen through, and the body the tour is on;
+- top right, every body it passes: how far it is now, how near it comes, and how long until (or since) the nearest approach;
+- bottom left, where it is: two maps of the planet's system to scale, from above the planet's north pole and from the side, with the moons and their paths, Voyager's path (behind it solid, ahead faint), the direction of the Sun and a scale bar. Both maps have the direction Voyager came from on the left, and both close in as Voyager nears the planet.
+
 | | |
 |---|---|
 | drag with the mouse | turn the view about the spacecraft (by eye only; through a camera the view stays on its body); it then stays where you put it until the next flyby |
@@ -135,6 +141,7 @@ These distances come out of the simulation; the terminal lists them with their d
 | `1` `2` `3` `4` | Jupiter, Saturn, Uranus, Neptune |
 | `z` | by eye, wide-angle camera, narrow-angle camera |
 | `v` | the spacecraft in view or not |
+| `m`, `i` | the maps, the data panels: on or off |
 | `n`, `p` | next, previous flyby, facing it |
 | `f` | face the planet |
 | `+` `-` | faster, slower |
@@ -144,15 +151,15 @@ These distances come out of the simulation; the terminal lists them with their d
 
 `./play.sh saturn -14 60` starts without the tour, 14 hours before the nearest approach to Saturn at 60 times real speed; `./play.sh jupiter ganymede 1` starts at Ganymede's nearest approach in real time.
 
-True to life: the direction and apparent size of every body at every moment (from the simulation), the stars (NASA's star map, every star where it is in the sky, turned into the planet's frame), the planets in visible light, which side of each body is in sunlight, the planet's turning, Saturn's rings, the spacecraft's shape and surface with its dish toward the Earth, the fields of its two cameras.
+True to life: the direction and apparent size of every body at every moment (from the simulation), the stars (the Hipparcos catalogue: each star a dot at its measured place, moved back to the year of the flyby by its proper motion and seen from where the spacecraft was, as bright as measured, with a hint of its measured colour; 8 870 stars to magnitude 6.5 for the eye, to magnitude 8 and 9 through the cameras), the planets in visible light, which side of each body is in sunlight, the planet's turning, Saturn's rings, the spacecraft's shape and surface with its dish toward the Earth and the sunlight on it (the dish's open face lit, the far side and what lies in the dish's shadow not), the fields of its two cameras: a camera magnifies the whole picture, stars included, so through the narrow-angle camera there is seldom a star in view.
 
-Not true to life: time; the Sun, drawn at least a fifth of a degree wide; no shadows (of Saturn on its rings, of a planet on a moon); how the spacecraft is rolled about its dish; through a camera the stars stay as the eye sees them; GameApi's own camera is a long lens, 17 degrees from top to bottom, so stars look larger than points.
+Not true to life: time; the Sun, drawn at least a fifth of a degree wide (and plain white); the unlit side of everything, which in space is black and here keeps a fifth of its brightness so that it can be seen; no shadows of one body on another (of Saturn on its rings, of a planet on a moon); the moons' maps are not turned to the face each moon really showed; how the spacecraft is rolled about its dish; sunlight on the spacecraft comes from where the Earth is (from out there the two are a few degrees apart); the brightness of the stars is squeezed into what a screen can show. GameApi's own camera is a long lens, 17 degrees from top to bottom.
 
-It has been played by hand once (the scene keys worked) and otherwise run on a virtual screen, where these pictures were taken. Memory stayed level in a one-minute run. One run in about ten stopped by itself with an out-of-memory error a few seconds after the start; the cause is not found.
+It has been played by hand (the scene keys worked) and otherwise run on a virtual screen, where these pictures were taken. About one start in ten fails: the window stays black, or the program stops with an out-of-memory error after a few seconds. The cause is not found; starting again helps.
 
 Building GameApi on Ubuntu: `sudo apt-get install libsdl2-dev libsdl2-mixer-dev libglew-dev libfreetype-dev libopencv-dev` (its own README does not list the last one), then `make -j 8 depbuild` in `GameApi/GameApi`. GameApi asks for an antialiased window, which some X servers give only through EGL; `play.sh` sets `SDL_VIDEO_X11_FORCE_EGL=1` for that.
 
-How the game draws, in GameApi's terms: every body is its own model with its own matrix, set anew each frame. GameApi scales each model it loads to 400 units across; the first triangle of each of our files spans the model's box so that this is exact. Bodies and sky are drawn in a first pass with the eye at the spacecraft, each at a distance that keeps their order and with the size that gives its true apparent size; the spacecraft is drawn in a second pass. Sunlight on a body is a second ball over it, turned to the Sun, clear on the day side and darkening to the night side.
+How the game draws, in GameApi's terms: every body is its own model with its own matrix, set anew each frame. GameApi scales each model it loads to 400 units across; the first triangle of each of our files spans the model's box so that this is exact. The stars are drawn first (three files for each planet, one for the eye and one for each camera, every star a small square with a soft dot on it), then the bodies with the eye at the spacecraft, each at a distance that keeps their order and with the size that gives its true apparent size, then the spacecraft. A camera is a scaling of the whole picture, 5.4 or 40 times. Sunlight on a body is a second ball over it, turned to the Sun, clear on the day side and darkening to the night side. Sunlight on the spacecraft is in its textures (`tools/undraco.py`). The panels and maps are drawn last, in plain OpenGL (`panels.hpp`), with letters from `glyphs.hpp`.
 
 ## The overview views
 
@@ -168,10 +175,11 @@ SDL_VIDEO_X11_FORCE_EGL=1 LD_LIBRARY_PATH=../GameApi/GameApi ../GameApi/GameApi/
 |---|---|
 | `voyager2.cpp` | the simulation: the legs, the comparison, the glTF writer, the game's data |
 | `game.cpp`, `play.sh` | the game, on GameApi |
+| `panels.hpp`, `glyphs.hpp` | flat drawing over the picture (boxes, lines, text) and its letters; `tools/font.sh` wrote the letters |
 | `orbit/orbit.hpp` | the orbit library (a copy; one header, no dependencies) |
-| `data/` | 38 vector tables from NASA JPL Horizons; `fetch.sh` fetches them again |
-| `textures/` | surface maps and the star map; `fetch-textures.sh` fetches and prepares them again |
-| `models/probe/` | NASA's Voyager model in three plain glTF parts; `tools/undraco.py` made them from `models/voyager-probe-b.glb` |
+| `data/` | 38 vector tables from NASA JPL Horizons and the stars to magnitude 9 (`stars.txt`); `fetch.sh` fetches them again |
+| `textures/` | surface maps; `fetch-textures.sh` fetches and prepares them again |
+| `models/probe/` | NASA's Voyager model in three plain glTF parts, each with its texture; `tools/undraco.py` made them from `models/voyager-probe-b.glb` and put the sunlight in |
 | `screens/` | pictures from the game |
 | `GameApi/` | the engine, as a git submodule |
 | `run.sh` | builds and runs the simulation |
@@ -185,9 +193,10 @@ Thrust, radiation and heat recoil, flattening beyond J2, rings and small moons, 
 - Trajectory of Voyager 2 and positions of the Sun, planets and moons: NASA JPL Horizons (`ssd.jpl.nasa.gov/horizons`), fetched 2026-11-15. Masses from the same service.
 - Planet poles: IAU working group on cartographic coordinates. Flattening (J2) with its reference radius: published gravity fields of the planets. Both are written out in `voyager2.cpp`.
 - Spacecraft model: NASA 3D Resources (`github.com/nasa/NASA-3D-Resources`, "Voyager Probe (B)"), which NASA describes as free and without copyright; unpacked from its mesh compression for GameApi.
-- Moon maps: NASA 3D Resources, "Images and Textures", the same terms.
-- Planet, Sun and ring maps in visible light: Solar System Scope (`solarsystemscope.com/textures`), licence CC BY 4.0, made from NASA data.
-- Star map: NASA Scientific Visualization Studio, Deep Star Maps 2020 (`svs.gsfc.nasa.gov/4851`), from the Hipparcos, Tycho and Gaia catalogues.
+- Moon maps: NASA 3D Resources, "Images and Textures", the same terms. Two are not as NASA's files have them. Io is the U.S. Geological Survey's global mosaic (Galileo colour over Galileo and Voyager detail, public domain, `astrogeology.usgs.gov`); its colours come from Galileo's violet, green and near-infrared filters, and to the eye Io is the same but paler. Titan is NASA's map brought from a strong red-orange to the tan-orange of Titan's haze in visible light.
+- Planet and ring maps in visible light: Solar System Scope (`solarsystemscope.com/textures`), licence CC BY 4.0, made from NASA data.
+- Stars: the Hipparcos catalogue (ESA, 1997; CDS catalogue I/239), every star to magnitude 9: position, proper motion, parallax, brightness and colour.
+- Letters on the screen: DejaVu Sans Mono (Bitstream Vera licence), as small pictures in `glyphs.hpp`.
 - GameApi: by its author, under its own licence (GPL and LGPL), used here with the author's consent.
 
 ## Licence

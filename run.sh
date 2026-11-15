@@ -7,4 +7,3 @@ cd "$(dirname "$0")"
 mkdir -p out
 ${CXX:-c++} -std=c++20 -O2 -Wall -Wextra -Iorbit voyager2.cpp -o out/voyager2
 ./out/voyager2 data out
-cp models/voyager-probe-a.glb out/

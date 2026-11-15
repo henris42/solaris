@@ -248,6 +248,46 @@ flown fly(const leg& l, bool with_j2) {
   return f;
 }
 
+// ---- output: a picture (PNG, not compressed) ----
+
+void write_png(const std::string& path, int w, int h, const std::string& rgba) {
+  const auto big = [](std::string& s, std::uint32_t v) {
+    for (int k = 24; k >= 0; k -= 8) s.push_back(static_cast<char>(v >> k));
+  };
+  const auto chunk = [&](std::string& file, const char* type, const std::string& data) {
+    std::string body = std::string(type, 4) + data;
+    std::uint32_t crc = 0xffffffffu;
+    for (unsigned char ch : body) {
+      crc ^= ch;
+      for (int k = 0; k < 8; ++k) crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    big(file, static_cast<std::uint32_t>(data.size()));
+    file += body;
+    big(file, ~crc);
+  };
+  std::string raw;  // every row with a zero in front: "no filter"
+  for (int y = 0; y < h; ++y) raw += '\0' + rgba.substr(static_cast<std::size_t>(y) * w * 4, static_cast<std::size_t>(w) * 4);
+  std::string z = "\x78\x01";  // zlib, stored blocks
+  std::uint32_t a = 1, b = 0;
+  for (std::size_t at = 0; at < raw.size(); at += 65535) {
+    const std::size_t n = std::min<std::size_t>(65535, raw.size() - at);
+    z.push_back(at + n == raw.size() ? 1 : 0);
+    for (std::size_t v : {n, ~n}) { z.push_back(static_cast<char>(v)); z.push_back(static_cast<char>(v >> 8)); }
+    z += raw.substr(at, n);
+  }
+  for (unsigned char ch : raw) { a = (a + ch) % 65521; b = (b + a) % 65521; }
+  big(z, (b << 16) | a);
+  std::string head;
+  big(head, static_cast<std::uint32_t>(w));
+  big(head, static_cast<std::uint32_t>(h));
+  head += std::string("\x08\x06\x00\x00\x00", 5);
+  std::string file = "\x89PNG\r\n\x1a\n";
+  chunk(file, "IHDR", head);
+  chunk(file, "IDAT", z);
+  chunk(file, "IEND", "");
+  std::ofstream(path, std::ios::binary) << file;
+}
+
 // ---- output: glTF ----
 
 // Triangles of one colour, or with one surface map.
@@ -602,32 +642,85 @@ int main(int argc, char** argv) {
       o << d.x / 1e3 << " " << d.y / 1e3 << " " << d.z / 1e3 << "\n";
     }
   }
-  // out/sky-<planet>.glb: the sky as a ball seen from inside, laid out for a star map
-  // in celestial coordinates (centred at 0 h right ascension, which increases to the
-  // left) and turned into the planet's frame, so that every star is where it is.
+  // out/stars-<planet>-<1|2|3>.glb: the real stars, one small square each, every
+  // star where the Hipparcos catalogue (ESA 1997) has it: data/stars.txt holds
+  // right ascension, declination (degrees, ICRS, at 1991.25), V magnitude, B-V
+  // colour, proper motion (mas a year) and parallax (mas). Each star is moved back
+  // to the year of the flyby and seen from where the spacecraft was, then turned
+  // into the planet's frame. Three files: for the eye (to magnitude 6.5), and for
+  // the wide-angle and narrow-angle cameras (to 8 and 9), whose squares are that
+  // many times smaller, since a camera magnifies them again.
+  // out/star-dots.png: the dots. Eight columns of colour (blue-white to orange,
+  // by B-V), eight rows of brightness.
+  {
+    const int tile = 8;
+    const double tint[8][3] = {{179, 202, 255}, {204, 219, 255}, {236, 238, 255}, {255, 243, 239}, {255, 228, 206}, {255, 215, 177}, {255, 203, 152}, {255, 190, 122}};
+    std::string dots;  // rows from the top: red, green, blue, opacity
+    for (int y = 0; y < 8 * tile; ++y)
+      for (int x = 0; x < 8 * tile; ++x) {
+        const double dx = x % tile + 0.5 - tile / 2.0, dy = y % tile + 0.5 - tile / 2.0, sigma = tile / 6.0;
+        const double g = std::max(0.0, std::exp(-(dx * dx + dy * dy) / (2.0 * sigma * sigma)) - 0.02) / 0.98;
+        const double* c = tint[x / tile];
+        // the eye sees little colour in a point of light: the tint at 40 %
+        for (int k : {0, 1, 2}) dots.push_back(static_cast<char>(static_cast<unsigned char>(255.0 + 0.4 * (c[k] - 255.0))));
+        dots.push_back(static_cast<char>(static_cast<unsigned char>(255.0 * g * (y / tile + 1) / 8.0 + 0.5)));
+      }
+    write_png(out + "/star-dots.png", 8 * tile, 8 * tile, dots);
+  }
+  struct star { double ra, dec, mag, bv, pm_ra, pm_dec, parallax; };
+  std::vector<star> stars;
+  {
+    std::ifstream f(g_data + "/stars.txt");
+    star s{};
+    while (f >> s.ra >> s.dec >> s.mag >> s.bv >> s.pm_ra >> s.pm_dec >> s.parallax) stars.push_back(s);
+  }
+  const double year[4] = {1979.52, 1981.65, 1986.07, 1989.65};
+  const double reach[3] = {6.5, 8.0, 9.0}, lens[3] = {1.0, 5.4, 40.0};
   for (std::size_t n = 0; n < 4; ++n) {
-    const planet& c = *kLegs[flyby_leg[n]].centre;
-    const frame fr = pole_frame(c.pole_ra, c.pole_dec);
-    part p{"stars", {1.0f, 1.0f, 1.0f}, "", 2, {}, {}, {}, {}};
-    put(p, {-1, -1, -1}, {0, 0, 1});
-    put(p, {1, 1, 1}, {0, 0, 1});
-    put(p, {-1, -1, -1}, {0, 0, 1});
-    for (std::uint32_t i : {0u, 1u, 2u}) p.idx.push_back(i);
-    const int around = 96, rings = 48;
-    for (int i = 0; i <= rings; ++i) {
-      const double dec = kPi / 2.0 - kPi * i / rings;
-      for (int j = 0; j <= around; ++j) {
-        const double ra = 2.0 * kPi * (0.5 - static_cast<double>(j) / around);
-        const vec3 d = fr.turn({std::cos(dec) * std::cos(ra), std::cos(dec) * std::sin(ra), std::sin(dec)});
-        put(p, d, -1.0 * d, static_cast<double>(j) / around, static_cast<double>(i) / rings);
+    const leg& l = kLegs[flyby_leg[n]];
+    const flown& f = flights[flyby_leg[n]];
+    const frame fr = pole_frame(l.centre->pole_ra, l.centre->pole_dec);
+    // the spacecraft from the Sun at its nearest to the planet, in astronomical units
+    std::size_t near = 0;
+    for (std::size_t j = 0; j < f.sim.size(); ++j) if (norm(f.sim[j]) < norm(f.sim[near])) near = j;
+    const auto sun = state_at(std::span<const orbit_sample>(f.paths[0]), f.nasa[near].t);
+    const vec3 here = (1.0 / 149597870700.0) * (f.sim[near] - (sun ? sun->pos : vec3{}));
+    for (int cam = 0; cam < 3; ++cam) {
+      part p{"stars", {1.0f, 1.0f, 1.0f}, "", 2, {}, {}, {}, {}};
+      put(p, {-1, -1, -1}, {0, 0, 1});
+      put(p, {1, 1, 1}, {0, 0, 1});
+      put(p, {-1, -1, -1}, {0, 0, 1});
+      for (std::uint32_t i : {0u, 1u, 2u}) p.idx.push_back(i);
+      const double pixel = 3.76e-4 / lens[cam];  // one pixel of the game's view, radians
+      for (const star& s : stars) {
+        if (s.mag > reach[cam]) continue;
+        const double dt = year[n] - 1991.25, mas = kPi / 180.0 / 3.6e6;
+        const double dec = s.dec * kPi / 180.0 + s.pm_dec * dt * mas;
+        const double ra = s.ra * kPi / 180.0 + s.pm_ra * dt * mas / std::cos(dec);
+        vec3 d = fr.turn({std::cos(dec) * std::cos(ra), std::cos(dec) * std::sin(ra), std::sin(dec)});
+        if (s.parallax > 0.5) {  // near enough to shift when seen from the outer planets
+          d = (206264806.0 / s.parallax) * d - here;
+          d = (1.0 / norm(d)) * d;
+        }
+        // the brighter, the larger and the more solid the dot
+        const double step = std::clamp(reach[cam] - s.mag, 0.0, 8.0);
+        const double half = (2.1 + 0.56 * step) * pixel;
+        const int row = std::clamp(static_cast<int>(8.0 * (0.3 + 0.175 * step) + 0.5), 1, 8) - 1;
+        const double edges[7] = {-0.12, 0.15, 0.45, 0.75, 1.05, 1.35, 1.7};
+        int col = 0;
+        while (col < 7 && s.bv > edges[col]) ++col;
+        vec3 e1 = cross(std::fabs(d.z) < 0.9 ? vec3{0, 0, 1} : vec3{1, 0, 0}, d);
+        e1 = (1.0 / norm(e1)) * e1;
+        const vec3 e2 = cross(d, e1);
+        const auto base = static_cast<std::uint32_t>(p.pos.size() / 3);
+        for (int k = 0; k < 4; ++k) {  // up and left, up and right, down and left, down and right, seen from inside
+          const double a = k % 2 ? -half : half, b = k < 2 ? half : -half;
+          put(p, d + a * e1 + b * e2, -1.0 * d, (col + (k % 2 ? 1.0 : 0.0)) / 8.0, (row + (k < 2 ? 0.0 : 1.0)) / 8.0);
+        }
+        for (std::uint32_t k : {0u, 1u, 2u, 1u, 3u, 2u}) p.idx.push_back(base + k);
       }
+      write_glb(out + "/stars-" + files[n] + "-" + std::to_string(cam + 1) + ".glb", {p});
     }
-    for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(rings); ++i)
-      for (std::uint32_t j = 0; j < static_cast<std::uint32_t>(around); ++j) {
-        const std::uint32_t q = 3 + i * (around + 1) + j, b = q + around + 1;
-        for (std::uint32_t k : {q, q + 1, b, q + 1, b + 1, b}) p.idx.push_back(k);
-      }
-    write_glb(out + "/sky-" + files[n] + ".glb", {p});
   }
   // out/ring.glb: Saturn's rings, flat in the planet's equator, in units of the
   // planet's radius, from the inner edge of the D ring to the F ring. The texture
@@ -664,7 +757,7 @@ int main(int argc, char** argv) {
                            "Iapetus", "Ariel", "Umbriel", "Titania", "Oberon", "Miranda", "Triton", "Sun", "Shade"}) {
     const bool sky = false;
     part p{name, {0.62f, 0.85f, 0.88f}, "", 1, {}, {}, {}, {}};
-    if (std::string(name) == "Sun") p.rgb[0] = 1.0f, p.rgb[1] = 0.95f, p.rgb[2] = 0.8f;
+    if (std::string(name) == "Sun") p.rgb[0] = 1.0f, p.rgb[1] = 0.96f, p.rgb[2] = 0.92f;  // sunlight is white
     if (sky || std::string(name) == "Sun") p.shade = 2;
     put(p, {-1, -1, -1}, {0, 0, 1});
     put(p, {1, 1, 1}, {0, 0, 1});
