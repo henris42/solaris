@@ -360,9 +360,10 @@ struct view {
     std::ofstream f(dir + "/" + name + ".txt");
     char b[200];
     std::snprintf(b, sizeof b, "MN I7=ev.move_api.trans2(I6,%.2f,%.2f,%.2f);\n", k * probe.x, k * probe.z, -k * probe.y);
-    f << "TF I1=ev.mainloop_api.gltf_loadKK2(" << name << ".glb);\n"
+    // GameApi fetches files with curl; $(pwd) is its own name for the folder it runs in
+    f << "TF I1=ev.mainloop_api.gltf_loadKK2(file://$(pwd)/" << name << ".glb);\n"
          "ML I2=ev.mainloop_api.gltf_mesh_all(ev,I1,1.0,1.0,1.0,0,400.0,-400.0,300.0,0.0,ff000000,false,true,false);\n"
-         "TF I3=ev.mainloop_api.gltf_loadKK2(voyager-probe-a.glb);\n"
+         "TF I3=ev.mainloop_api.gltf_loadKK2(file://$(pwd)/voyager-probe-a.glb);\n"
          "ML I4=ev.mainloop_api.gltf_mesh_all(ev,I3,1.0,1.0,1.0,0,400.0,-400.0,300.0,0.0,ff000000,false,true,false);\n"
          "MN I5=ev.move_api.mn_empty();\n"
          "MN I6=ev.move_api.scale2(I5,100.0,100.0,100.0);\n"

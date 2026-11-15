@@ -129,7 +129,7 @@ LD_LIBRARY_PATH=../GameApi/GameApi ../GameApi/GameApi/cmdline/gameapi_cmdline --
 
 GameApi's world reaches about 1000 units either way; the views are scaled to 300 so that they sit inside its default camera.
 
-The `.glb` files are checked to be well-formed glTF 2.0. They and the scripts have not yet been opened in GameApi: the scripts are written from GameApi's own examples and may need a correction. Building GameApi on Ubuntu needs `libsdl2-dev`, `libsdl2-mixer-dev`, `libglew-dev` and `libfreetype-dev`.
+The `.glb` files are checked to be well-formed glTF 2.0. They and the scripts have not yet been opened in GameApi: the scripts are written from GameApi's own examples and may need a correction. Building GameApi on Ubuntu needs `libsdl2-dev`, `libsdl2-mixer-dev`, `libglew-dev`, `libfreetype-dev` and `libopencv-dev` (its own README does not list the last one), then `make -j 8 depbuild` in `GameApi/GameApi`. The scripts load the views as local files from the folder GameApi is started in.
 
 ## Files
 
