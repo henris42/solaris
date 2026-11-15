@@ -24,12 +24,14 @@
 //
 // Build and run: ./run.sh    (any C++20 compiler; nothing else is needed)
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <span>
 #include <string>
 #include <vector>
@@ -56,6 +58,7 @@ struct row {
 };
 
 std::string g_data = "data";
+std::string g_maps = "textures";
 
 std::vector<row> read_horizons(const std::string& name) {
   std::vector<row> out;
@@ -235,20 +238,24 @@ flown fly(const leg& l, bool with_j2) {
 
 // ---- output: glTF ----
 
-// Triangles of one colour.
+// Triangles of one colour, or with one surface map.
 struct part {
   std::string name;
   float rgb[3];
-  std::vector<float> pos, nrm;
+  std::string map;  // a file in textures/ without ".jpg"; empty: the plain colour
+  std::vector<float> pos, nrm, uv;
   std::vector<std::uint32_t> idx;
 };
 
 // glTF has y up; ours is z up.
-void put(part& m, vec3 p, vec3 n) {
-  for (double v : {p.x, p.z, -p.y}) m.pos.push_back(static_cast<float>(v));
-  for (double v : {n.x, n.z, -n.y}) m.nrm.push_back(static_cast<float>(v));
+void put(part& m, vec3 p, vec3 n, double u = 0.0, double v = 0.0) {
+  for (double c : {p.x, p.z, -p.y}) m.pos.push_back(static_cast<float>(c));
+  for (double c : {n.x, n.z, -n.y}) m.nrm.push_back(static_cast<float>(c));
+  m.uv.push_back(static_cast<float>(u));
+  m.uv.push_back(static_cast<float>(v));
 }
 
+// A ball with its north pole along z; a surface map wraps once around it, north at the top.
 void add_ball(part& m, vec3 c, double r, int around = 12, int rings = 8) {
   const auto base = static_cast<std::uint32_t>(m.pos.size() / 3);
   for (int i = 0; i <= rings; ++i) {
@@ -256,7 +263,7 @@ void add_ball(part& m, vec3 c, double r, int around = 12, int rings = 8) {
     for (int j = 0; j <= around; ++j) {
       const double ph = 2.0 * kPi * j / around;
       const vec3 n{std::sin(th) * std::cos(ph), std::sin(th) * std::sin(ph), std::cos(th)};
-      put(m, c + r * n, n);
+      put(m, c + r * n, n, static_cast<double>(j) / around, static_cast<double>(i) / rings);
     }
   }
   const auto w = static_cast<std::uint32_t>(around + 1);
@@ -295,43 +302,76 @@ void add_tube(part& m, const std::vector<vec3>& p, double r, int sides = 6) {
     }
 }
 
-// A binary glTF 2.0 file: one mesh, one primitive and one plain material per part.
+std::string file_bytes(const std::string& path) {
+  std::ifstream f(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+}
+
+// A binary glTF 2.0 file: one mesh; per part one primitive and one material, plain
+// or with the part's surface map packed into the file.
 void write_glb(const std::string& path, const std::vector<part>& parts) {
-  std::string bin, views, accessors, prims, materials;
-  int view = 0, m = 0;
+  std::string bin, views, accessors, prims, materials, images, textures;
+  int view = 0, accessor = 0, material = 0, image = 0;
+  char b[900];
   const auto blob = [&](const void* d, std::size_t n, int target) {
     const std::size_t at = bin.size();
     bin.append(static_cast<const char*>(d), n);
     while (bin.size() % 4) bin.push_back('\0');
-    char b[160];
-    std::snprintf(b, sizeof b, "%s{\"buffer\":0,\"byteOffset\":%zu,\"byteLength\":%zu,\"target\":%d}", view ? "," : "", at, n, target);
+    char t[40] = "";
+    if (target) std::snprintf(t, sizeof t, ",\"target\":%d", target);
+    std::snprintf(b, sizeof b, "%s{\"buffer\":0,\"byteOffset\":%zu,\"byteLength\":%zu%s}", view ? "," : "", at, n, t);
     views += b;
     return view++;
   };
+  const auto vectors = [&](const std::vector<float>& d, const char* type, int width, bool bounds) {
+    const int v = blob(d.data(), d.size() * 4, 34962);
+    std::string minmax;
+    if (bounds) {
+      float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+      for (std::size_t i = 0; i < d.size(); ++i) { lo[i % 3] = std::min(lo[i % 3], d[i]); hi[i % 3] = std::max(hi[i % 3], d[i]); }
+      std::snprintf(b, sizeof b, ",\"min\":[%.9g,%.9g,%.9g],\"max\":[%.9g,%.9g,%.9g]", lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+      minmax = b;
+    }
+    std::snprintf(b, sizeof b, "%s{\"bufferView\":%d,\"componentType\":5126,\"count\":%zu,\"type\":\"%s\"%s}", accessor ? "," : "", v,
+                  d.size() / static_cast<std::size_t>(width), type, minmax.c_str());
+    accessors += b;
+    return accessor++;
+  };
   for (const part& p : parts) {
     if (p.idx.empty()) continue;
-    float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
-    for (std::size_t i = 0; i < p.pos.size(); ++i) { lo[i % 3] = std::min(lo[i % 3], p.pos[i]); hi[i % 3] = std::max(hi[i % 3], p.pos[i]); }
-    const int vp = blob(p.pos.data(), p.pos.size() * 4, 34962);
-    const int vn = blob(p.nrm.data(), p.nrm.size() * 4, 34962);
+    const std::string jpeg = p.map.empty() ? "" : file_bytes(g_maps + "/" + p.map + ".jpg");
+    const int ap = vectors(p.pos, "VEC3", 3, true), an = vectors(p.nrm, "VEC3", 3, false);
+    const int at = jpeg.empty() ? -1 : vectors(p.uv, "VEC2", 2, false);
     const int vi = blob(p.idx.data(), p.idx.size() * 4, 34963);
-    char b[700];
-    std::snprintf(b, sizeof b,
-                  "%s{\"bufferView\":%d,\"componentType\":5126,\"count\":%zu,\"type\":\"VEC3\",\"min\":[%.9g,%.9g,%.9g],\"max\":[%.9g,%.9g,%.9g]},"
-                  "{\"bufferView\":%d,\"componentType\":5126,\"count\":%zu,\"type\":\"VEC3\"},"
-                  "{\"bufferView\":%d,\"componentType\":5125,\"count\":%zu,\"type\":\"SCALAR\"}",
-                  m ? "," : "", vp, p.pos.size() / 3, lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], vn, p.nrm.size() / 3, vi, p.idx.size());
+    std::snprintf(b, sizeof b, ",{\"bufferView\":%d,\"componentType\":5125,\"count\":%zu,\"type\":\"SCALAR\"}", vi, p.idx.size());
     accessors += b;
-    std::snprintf(b, sizeof b, "%s{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d},\"indices\":%d,\"material\":%d,\"mode\":4}", m ? "," : "", 3 * m, 3 * m + 1, 3 * m + 2, m);
+    const int ai = accessor++;
+    char tc[40] = "";
+    if (at >= 0) std::snprintf(tc, sizeof tc, ",\"TEXCOORD_0\":%d", at);
+    std::snprintf(b, sizeof b, "%s{\"attributes\":{\"POSITION\":%d,\"NORMAL\":%d%s},\"indices\":%d,\"material\":%d,\"mode\":4}", material ? "," : "", ap, an, tc, ai, material);
     prims += b;
-    std::snprintf(b, sizeof b, "%s{\"name\":\"%s\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[%.3f,%.3f,%.3f,1],\"metallicFactor\":0,\"roughnessFactor\":0.9}}",
-                  m ? "," : "", p.name.c_str(), p.rgb[0], p.rgb[1], p.rgb[2]);
+    if (jpeg.empty()) {
+      std::snprintf(b, sizeof b, "%s{\"name\":\"%s\",\"pbrMetallicRoughness\":{\"baseColorFactor\":[%.3f,%.3f,%.3f,1],\"metallicFactor\":0,\"roughnessFactor\":0.9},"
+                    "\"emissiveFactor\":[%.3f,%.3f,%.3f]}",
+                    material ? "," : "", p.name.c_str(), p.rgb[0], p.rgb[1], p.rgb[2], 0.6f * p.rgb[0], 0.6f * p.rgb[1], 0.6f * p.rgb[2]);
+    } else {
+      const int vj = blob(jpeg.data(), jpeg.size(), 0);
+      std::snprintf(b, sizeof b, "%s{\"bufferView\":%d,\"mimeType\":\"image/jpeg\",\"name\":\"%s\"}", image ? "," : "", vj, p.map.c_str());
+      images += b;
+      std::snprintf(b, sizeof b, "%s{\"source\":%d,\"sampler\":0}", image ? "," : "", image);
+      textures += b;
+      std::snprintf(b, sizeof b, "%s{\"name\":\"%s\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":%d},\"metallicFactor\":0,\"roughnessFactor\":0.9},"
+                    "\"emissiveTexture\":{\"index\":%d},\"emissiveFactor\":[0.7,0.7,0.7]}",
+                    material ? "," : "", p.name.c_str(), image, image);
+      ++image;
+    }
     materials += b;
-    ++m;
+    ++material;
   }
   std::string js = "{\"asset\":{\"version\":\"2.0\",\"generator\":\"voyager2 (orbit.hpp)\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],"
-                   "\"nodes\":[{\"mesh\":0,\"name\":\"voyager2\"}],\"meshes\":[{\"primitives\":[" + prims + "]}],\"materials\":[" + materials +
-                   "],\"buffers\":[{\"byteLength\":" + std::to_string(bin.size()) + "}],\"bufferViews\":[" + views + "],\"accessors\":[" + accessors + "]}";
+                   "\"nodes\":[{\"mesh\":0,\"name\":\"voyager2\"}],\"meshes\":[{\"primitives\":[" + prims + "]}],\"materials\":[" + materials + "],";
+  if (image) js += "\"images\":[" + images + "],\"textures\":[" + textures + "],\"samplers\":[{\"magFilter\":9729,\"minFilter\":9729,\"wrapS\":10497,\"wrapT\":33071}],";
+  js += "\"buffers\":[{\"byteLength\":" + std::to_string(bin.size()) + "}],\"bufferViews\":[" + views + "],\"accessors\":[" + accessors + "]}";
   while (js.size() % 4) js.push_back(' ');
   const auto u32 = [](std::ofstream& f, std::size_t v) { const auto x = static_cast<std::uint32_t>(v); f.write(reinterpret_cast<const char*>(&x), 4); };
   std::ofstream f(path, std::ios::binary);
@@ -340,41 +380,72 @@ void write_glb(const std::string& path, const std::vector<part>& parts) {
   u32(f, bin.size()); u32(f, 0x004E4942); f.write(bin.data(), static_cast<std::streamsize>(bin.size()));
 }
 
+// A planet or a moon as a ball of its own, with its surface map if there is one in textures/.
+part ball_of(const std::string& name, vec3 c, double r, int around, int rings) {
+  std::string map = name;
+  for (char& ch : map) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  part p{name, {0.62f, 0.85f, 0.88f}, std::ifstream(g_maps + "/" + map + ".jpg").good() ? map : "", {}, {}, {}, {}};
+  add_ball(p, c, r, around, rings);
+  return p;
+}
+
 // One view: NASA's trajectory as beads, the simulated one as a line, the bodies around them.
 struct view {
-  part nasa{"NASA trajectory", {0.82f, 0.80f, 0.74f}, {}, {}, {}};
-  part sim{"simulated", {0.16f, 0.47f, 0.84f}, {}, {}, {}};
-  part orbits{"orbits", {0.50f, 0.50f, 0.48f}, {}, {}, {}};
-  part moons{"moons", {0.92f, 0.41f, 0.20f}, {}, {}, {}};
-  part body{"planet", {0.86f, 0.74f, 0.52f}, {}, {}, {}};
-  part sun{"Sun", {1.0f, 0.82f, 0.25f}, {}, {}, {}};
-  // Writes <dir>/<name>.glb, scaled to fit 300 units either side of the middle (the
+  part nasa{"NASA trajectory", {0.82f, 0.80f, 0.74f}, "", {}, {}, {}, {}};
+  part sim{"simulated", {0.16f, 0.47f, 0.84f}, "", {}, {}, {}, {}};
+  part orbits{"orbits", {0.50f, 0.50f, 0.48f}, "", {}, {}, {}, {}};
+  part moons{"moon orbits", {0.92f, 0.41f, 0.20f}, "", {}, {}, {}, {}};
+  part sun{"Sun", {1.0f, 0.82f, 0.25f}, "", {}, {}, {}, {}};
+  std::vector<part> balls;  // planets and moons
+
+  // Writes <dir>/<name>.glb, centred and scaled to reach 150 units from the middle (the
   // size GameApi's default camera sees), and <dir>/<name>.txt, a GameApi script that
-  // shows it with NASA's model of the spacecraft at `probe`. Returns units per `unit`.
-  double save(const std::string& dir, const std::string& name, vec3 probe) {
-    float far = 1e-9f;
-    for (float v : nasa.pos) far = std::max(far, std::fabs(v));
-    const float k = 300.0f / far;
-    for (part* p : {&nasa, &sim, &orbits, &moons, &body, &sun}) for (float& v : p->pos) v *= k;
-    write_glb(dir + "/" + name + ".glb", {nasa, sim, orbits, moons, body, sun});
+  // shows it tilted by `tilt` radians, with NASA's model of the spacecraft at `probe`.
+  // Returns units per `unit`.
+  double save(const std::string& dir, const std::string& name, vec3 probe, double tilt) {
+    std::vector<part> all{nasa, sim, orbits, moons, sun};
+    all.insert(all.end(), balls.begin(), balls.end());
+    float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+    for (std::size_t q = 0; q < 2; ++q)
+      for (std::size_t i = 0; i < all[q].pos.size(); ++i) { lo[i % 3] = std::min(lo[i % 3], all[q].pos[i]); hi[i % 3] = std::max(hi[i % 3], all[q].pos[i]); }
+    float mid[3], half = 1e-9f;
+    for (int i = 0; i < 3; ++i) { mid[i] = (lo[i] + hi[i]) / 2; half = std::max(half, (hi[i] - lo[i]) / 2); }
+    const float k = 150.0f / half;
+    for (part& p : all)
+      for (std::size_t i = 0; i < p.pos.size(); ++i) p.pos[i] = (p.pos[i] - mid[i % 3]) * k;
+    write_glb(dir + "/" + name + ".glb", all);
     std::ofstream f(dir + "/" + name + ".txt");
-    char b[200];
-    std::snprintf(b, sizeof b, "MN I7=ev.move_api.trans2(I6,%.2f,%.2f,%.2f);\n", k * probe.x, k * probe.z, -k * probe.y);
+    char b[200], c[80];
+    std::snprintf(b, sizeof b, "MN I6=ev.move_api.trans2(I5,%.2f,%.2f,%.2f);\n", k * (probe.x - mid[0]), k * (probe.z - mid[1]), k * (-probe.y - mid[2]));
+    std::snprintf(c, sizeof c, "MN I11=ev.move_api.rotatex(I10,%.2f);\n", tilt);
     // GameApi fetches files with curl; $(pwd) is its own name for the folder it runs in
     f << "TF I1=ev.mainloop_api.gltf_loadKK2(file://$(pwd)/" << name << ".glb);\n"
-         "ML I2=ev.mainloop_api.gltf_mesh_all(ev,I1,1.0,1.0,1.0,0,400.0,-400.0,300.0,0.0,ff000000,false,true,false);\n"
+         "ML I2=ev.mainloop_api.gltf_mesh_all(ev,I1,1.0,1.0,1.0,0,400.0,-400.0,300.0,0.0,ff000000,false,true,true);\n"
          "TF I3=ev.mainloop_api.gltf_loadKK2(file://$(pwd)/voyager-probe-a.glb);\n"
-         "ML I4=ev.mainloop_api.gltf_mesh_all(ev,I3,1.0,1.0,1.0,0,400.0,-400.0,300.0,0.0,ff000000,false,true,false);\n"
+         "ML I4=ev.mainloop_api.gltf_mesh_all(ev,I3,1.0,1.0,1.0,0,400.0,-400.0,300.0,0.0,ff000000,false,true,true);\n"
          "MN I5=ev.move_api.mn_empty();\n"
-         "MN I6=ev.move_api.scale2(I5,100.0,100.0,100.0);\n"
       << b
+      << "MN I7=ev.move_api.scale2(I6,40.0,40.0,40.0);\n"
       << "ML I8=ev.move_api.move_ml(ev,I4,I7,1,10.0);\n"
          "ML I9=ev.mainloop_api.or_elem_ml(ev,I2,I8);\n"
-         "ML I10=ev.mainloop_api.touch_rotate(ev,I9,true,true,0.01,0.01);\n"
-         "RUN I11=ev.blocker_api.game_window2(ev,I10,false,false,0.0,100000.0);\n";
+         "MN I10=ev.move_api.mn_empty();\n"
+      << c
+      << "ML I12=ev.move_api.move_ml(ev,I9,I11,1,10.0);\n"
+         "ML I13=ev.mainloop_api.touch_rotate(ev,I12,true,true,0.01,0.01);\n"
+         "RUN I14=ev.blocker_api.game_window2(ev,I13,false,false,0.0,100000.0);\n";
     return k;
   }
 };
+
+// Half the largest extent of a set of points: the measure the marks of a view are sized by.
+double half_extent(const std::vector<vec3>& p) {
+  vec3 lo{1e300, 1e300, 1e300}, hi{-1e300, -1e300, -1e300};
+  for (const vec3& v : p) {
+    lo = {std::min(lo.x, v.x), std::min(lo.y, v.y), std::min(lo.z, v.z)};
+    hi = {std::max(hi.x, v.x), std::max(hi.y, v.y), std::max(hi.z, v.z)};
+  }
+  return std::max({hi.x - lo.x, hi.y - lo.y, hi.z - lo.z}) / 2.0;
+}
 
 void add_beads(part& m, const std::vector<vec3>& p, double r, std::size_t want) {
   const std::size_t k = std::max<std::size_t>(1, p.size() / want);
@@ -426,7 +497,6 @@ int main(int argc, char** argv) {
   const std::size_t flyby_leg[4] = {1, 3, 5, 7};
   for (int whole = 0; whole < 2; ++whole) {
     view v;
-    const double size = whole ? 3.0 : 1.0;  // the whole route is five times as far out
     const double t_end = whole ? 1e300 : flights[7].nasa.back().t;
     std::vector<vec3> nasa, sim;
     for (std::size_t i = 0; i < kLegs.size(); ++i) {
@@ -436,16 +506,17 @@ int main(int argc, char** argv) {
         sim.push_back((1.0 / kAu) * ecl.turn(flights[i].sim[j]));
       }
     }
-    add_beads(v.nasa, nasa, 0.10 * size, 260);
-    add_tube(v.sim, sim, 0.04 * size);
+    const double h = half_extent(nasa);
+    add_beads(v.nasa, nasa, h / 90.0, 70);
+    add_tube(v.sim, sim, h / 220.0);
     for (std::size_t p = 0; p < 4; ++p) {
       const std::vector<orbit_sample>& path = late.paths[1 + p];
-      add_tube(v.orbits, scaled(path, -1e300, whole ? 1e300 : t_end + 3e7, kAu, ecl), 0.015 * size);
+      add_tube(v.orbits, scaled(path, -1e300, whole ? 1e300 : t_end + 3e7, kAu, ecl), h / 500.0);
       const auto at = state_at(std::span<const orbit_sample>(path), flights[flyby_leg[p]].nasa.front().t);
-      if (at) add_ball(v.body, (1.0 / kAu) * ecl.turn(at->pos), 0.35 * size);  // the planet where Voyager met it
+      if (at) v.balls.push_back(ball_of(kLegs[flyby_leg[p]].centre->name, (1.0 / kAu) * ecl.turn(at->pos), h / 40.0, 24, 14));  // where Voyager met it
     }
-    add_ball(v.sun, {0, 0, 0}, 0.5 * size);
-    const double k = v.save(out, whole ? "route-whole" : "route-planets", sim.back());
+    add_ball(v.sun, {0, 0, 0}, h / 35.0);
+    const double k = v.save(out, whole ? "route-whole" : "route-planets", sim.back(), 1.0);
     if (!whole) std::printf("\nviews written to %s/\n", out.c_str());
     std::printf("%-17s 1 unit = %.3f AU\n", whole ? "route-whole.glb" : "route-planets.glb", 1.0 / k);
   }
@@ -455,7 +526,9 @@ int main(int argc, char** argv) {
     const leg& l = kLegs[flyby_leg[n]];
     const flown& f = flights[flyby_leg[n]];
     const double unit = 1e6;
-    const double reach = std::max(12.0 * f.nearest, 2.5e9);  // the part of the leg within sight of the planet
+    double reach = 6.0 * f.nearest;  // the part of the leg shown: out to past the farthest moon
+    for (std::size_t m = 1; m < l.masses.size(); ++m)
+      if (l.masses[m].gm < 1e5) reach = std::max(reach, 1.6 * norm(f.paths[m].front().pos));
     view v;
     std::vector<vec3> nasa, sim;
     double tn = f.nasa.front().t;
@@ -465,19 +538,19 @@ int main(int argc, char** argv) {
       nasa.push_back((1.0 / unit) * f.nasa[j].s.pos);
       sim.push_back((1.0 / unit) * f.sim[j]);
     }
-    const double size = reach / unit / 400.0;
-    add_beads(v.nasa, nasa, 1.6 * size, 220);
-    add_tube(v.sim, sim, 0.7 * size);
+    const double h = half_extent(nasa);
+    add_beads(v.nasa, nasa, h / 90.0, 60);
+    add_tube(v.sim, sim, h / 220.0);
     for (std::size_t m = 1; m < l.masses.size(); ++m) {
       if (norm(f.paths[m].front().pos) > reach) continue;  // the Sun, another planet
-      add_tube(v.moons, scaled(f.paths[m], f.nasa.front().t, f.nasa.back().t, unit, frame{}), 0.3 * size);
+      add_tube(v.moons, scaled(f.paths[m], f.nasa.front().t, f.nasa.back().t, unit, frame{}), h / 500.0);
       const auto at = state_at(std::span<const orbit_sample>(f.paths[m]), tn);  // the moon when Voyager was nearest
-      if (at) add_ball(v.moons, (1.0 / unit) * at->pos, 2.5 * size);
+      if (at) v.balls.push_back(ball_of(l.masses[m].name, (1.0 / unit) * at->pos, h / 45.0, 24, 14));
     }
-    add_ball(v.body, {0, 0, 0}, l.centre->radius * 1e3 / unit, 32, 20);
+    v.balls.push_back(ball_of(l.centre->name, {0, 0, 0}, l.centre->radius * 1e3 / unit, 48, 28));
     vec3 probe{};  // the spacecraft where it was nearest to the planet
     for (std::size_t j = 0; j < f.nasa.size(); ++j) if (f.nasa[j].t == tn) probe = (1.0 / unit) * f.sim[j];
-    const double k = v.save(out, files[n], probe);
+    const double k = v.save(out, files[n], probe, 0.6);
     std::printf("%-17s 1 unit = %.0f km\n", (std::string(files[n]) + ".glb").c_str(), 1000.0 / k);
   }
   std::printf("each with a GameApi script of the same name (.txt)\n");
