@@ -117,7 +117,7 @@ The step is 5 to 20 seconds in a flyby and one to six hours in a cruise. Halving
 
 ![The Jupiter tour](screens/tour-jupiter.jpg)
 
-Time runs slowly near things and fast between them, without steps: the planet grows at an even pace on the way in (the slowness is as one over its distance), every moon gets the same share of the three minutes around its nearest approach, and the planet shrinks again behind, a crescent. The view is on the body whose flyby it is, otherwise on the planet, through the camera Voyager would use for a body of that size in the sky: its narrow-angle camera (0.42 degrees wide) while the body is small, its wide-angle camera (3.2 degrees) as it grows, and the eye beside the spacecraft for what fills the sky. The view swings from one body to the next. Through a camera the spacecraft is drawn beside the picture.
+Time runs slowly near things and fast between them, without steps: the planet grows at an even pace on the way in (the slowness is as one over its distance), every moon gets the same share of the three minutes around its nearest approach, and the planet shrinks again behind, a crescent. The view is on the body whose flyby it is, otherwise on the planet, through the camera Voyager would use for a body of that size in the sky: its narrow-angle camera (0.42 degrees wide) while the body is small, its wide-angle camera (3.2 degrees) as it grows, and the eye beside the spacecraft for what fills the sky. The view swings from one body to the next, and a change of camera is a glide of about a second from one lens to the other, not a cut. Through a camera the spacecraft is drawn beside the picture.
 
 | Tour | Flybys, in order, with the nearest distance from the body's centre |
 |---|---|

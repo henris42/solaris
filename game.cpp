@@ -724,6 +724,7 @@ int main(int argc, char** argv) {
   bool autonomous = false;
   double lens_held = 0.0;
   double zoom = 1.0;        // 1: the eye beside the spacecraft; 5.4 and 40: through its wide-angle and narrow-angle cameras
+  double lens_now = 1.0;    // what is drawn: glides to `zoom` when the camera changes, so that the picture does not jump
   double aim_yaw = 0.0, aim_pitch = 0.0, from_yaw = 0.0, from_pitch = 0.0, swing = 1.0;
   double off_yaw = 0.1, off_pitch = 0.0, glide_yaw = 0.0, glide_pitch = 0.0;
   bool homing = false;      // the eye on its way back to where it started
@@ -889,8 +890,8 @@ int main(int argc, char** argv) {
       ahead(shot->dir, sy, sp);
       const double k = 1.0 - std::exp(-dt / 0.25);
       aim_yaw += nearer(sy, aim_yaw) * k, aim_pitch += (sp - aim_pitch) * k;
-      const double lens_now = shot->narrow ? 40.0 : 5.4;
-      if (lens_now != zoom && lens_held > 1.0) zoom = lens_now, lens_held = 0.0;
+      const double wanted = shot->narrow ? 40.0 : 5.4;
+      if (wanted != zoom && lens_held > 1.0) zoom = wanted, lens_held = 0.0;
       own_lens = true;
     } else {
       aim_yaw = swing < 1.0 ? from_yaw + nearer(to_yaw, from_yaw) * ease : to_yaw;
@@ -956,13 +957,21 @@ int main(int argc, char** argv) {
 
     // By eye, one view: the eye beside the spacecraft, turned by the mouse. Through a
     // camera, two: the camera's picture, on the focus, and the spacecraft beside it.
+    // A camera is a longer lens: the whole picture that many times larger. A change
+    // of camera is drawn as a glide from one lens to the other, about a second long.
+    lens_now = std::exp(std::log(lens_now) + (std::log(zoom) - std::log(lens_now)) * (1.0 - std::exp(-dt / 0.45)));
+    if (std::fabs(std::log(lens_now / zoom)) < 0.003) lens_now = zoom;
+    // By eye, one view: the eye beside the spacecraft, turned by the mouse. Through a
+    // camera, two: the camera's picture, on the focus, and the spacecraft beside it,
+    // which the mouse turns. Between the two (during a glide) the one becomes the other.
+    const double camera = std::clamp((lens_now - 1.0) / 2.0, 0.0, 1.0), beside = camera * camera * (3.0 - 2.0 * camera);  // 0 by eye, 1 through a camera
     const GameApi::M around = ev.matrix_api.mult(ev.matrix_api.yrot(static_cast<float>(aim_yaw + off_yaw)), ev.matrix_api.xrot(static_cast<float>(eye_pitch)));
-    const GameApi::M look = zoom > 1.0 ? ev.matrix_api.mult(ev.matrix_api.yrot(static_cast<float>(aim_yaw)), ev.matrix_api.xrot(static_cast<float>(aim_pitch))) : around;
+    const GameApi::M look = ev.matrix_api.mult(ev.matrix_api.yrot(static_cast<float>(aim_yaw + (1.0 - beside) * off_yaw)),
+                                               ev.matrix_api.xrot(static_cast<float>(aim_pitch + (1.0 - beside) * (eye_pitch - aim_pitch))));
     ev.mainloop_api.clear_3d(0xff000000);
-    // A camera is a longer lens: the whole picture that many times larger.
-    const auto power = static_cast<float>(zoom);
+    const auto power = static_cast<float>(lens_now);
     const GameApi::M lens = ev.matrix_api.scale(power, power, 1.0f);
-    const int cam = zoom <= 1.0 ? 0 : zoom < 10.0 ? 1 : 2;
+    const int cam = lens_now < 2.3 ? 0 : lens_now < 14.7 ? 1 : 2;  // the star field made for the nearest lens
     ev.move_api.set_matrix(stars_mn[cam], ev.matrix_api.mult(ev.matrix_api.scale(kSky / kBall, kSky / kBall, kSky / kBall), c.sky));
     glDepthMask(GL_FALSE);  // the stars are behind everything and do not hide each other
     ev.mainloop_api.execute_ml(ev, stars[cam], sh, sh2, sh2, sh3, look, lens, look, w, h);
@@ -971,7 +980,7 @@ int main(int argc, char** argv) {
     ev.mainloop_api.execute_ml(ev, c.ml, sh, sh2, sh2, sh3, look, lens, look, w, h);
     glClear(GL_DEPTH_BUFFER_BIT);
     if (craft)  // in the middle by eye; to the right of the camera's picture
-      ev.mainloop_api.execute_ml(ev, probe, sh, sh2, sh2, sh3, around, ev.matrix_api.trans(zoom > 1.0 ? 0.15f * eye : 0.0f, 0.0f, -eye), around, w, h);
+      ev.mainloop_api.execute_ml(ev, probe, sh, sh2, sh2, sh3, around, ev.matrix_api.trans(static_cast<float>(beside) * 0.15f * eye, 0.0f, -eye), around, w, h);
     std::size_t marked = focus;  // in the list: the body in view; following Voyager, the body it photographs, if it is one of the list
     if (shot) {
       marked = none;
