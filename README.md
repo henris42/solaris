@@ -180,9 +180,9 @@ Made-up ground. Nobody has seen all of these moons: Voyager 2 passed Uranus's mo
 | Europa, Ganymede, Callisto | 5 % each: strips at the poles |
 | Io, Titan, Saturn's moons | nothing |
 
-It has been played by hand (the scene keys worked) and otherwise run on a virtual screen, where these pictures were taken. The first picture takes some ten seconds (GameApi reads the stars); another planet then comes in under a second.
+It has been played by hand (the scene keys worked) and otherwise run on a virtual screen, where these pictures were taken. The first picture comes about a second after the start, and so does another planet.
 
-A note on starting. About one start in ten used to fail: the window stayed black at "loading", or the program stopped with an out-of-memory error after a few seconds. The black window is a deadlock inside GameApi: it reads models on several threads, and in the stuck program every thread, the main one included, was asleep waiting for another (seen with `ps -L`: all in `futex_do_wait`; the last lines of GameApi's own output were `Progressbar: ... join_id`). That is in the engine, and the engine is not changed here. The game works around it: a watch on the side starts the program afresh when no picture has been drawn for 45 seconds, or when it is about to stop on an error within two minutes of its start, three times at most (`start_afresh` in `game.cpp`). The restart itself has not yet been seen to happen in a test. Keys, clicks and drags are tested on the virtual screen with made-up events (`-DGAME_TEST`, see the top of `game.cpp`).
+A note on starting. GameApi is used from its `more_stable` branch, which its author recommends (the submodule points there). On its `master` branch about one start in ten failed: the window stayed black at "loading", every thread of the program asleep waiting for another (GameApi reads models on several threads), or the program stopped with an out-of-memory error. On `more_stable`, of some forty starts on the virtual screen none hung, and one stopped in its first seconds with broken memory (`malloc(): unaligned tcache chunk detected`); the next thirty were fine. The first picture also comes ten times sooner. The engine is not changed here; the game keeps a watch on the side instead, which starts the program afresh when no picture has been drawn for 45 seconds, or when it is about to stop on an error or a fault within two minutes of its start, three times at most (`start_afresh` in `game.cpp`). The restart has been seen to work on a fault sent from outside during loading (`kill -ABRT`, `kill -SEGV`); a restart after a real failed start has not come up in a test yet. Keys, clicks and drags are tested on the virtual screen with made-up events (`-DGAME_TEST`, see the top of `game.cpp`).
 
 Building GameApi on Ubuntu: `sudo apt-get install libsdl2-dev libsdl2-mixer-dev libglew-dev libfreetype-dev libopencv-dev` (its own README does not list the last one), then `make -j 8 depbuild` in `GameApi/GameApi`. GameApi asks for an antialiased window, which some X servers give only through EGL; `play.sh` sets `SDL_VIDEO_X11_FORCE_EGL=1` for that.
 
@@ -209,7 +209,7 @@ SDL_VIDEO_X11_FORCE_EGL=1 LD_LIBRARY_PATH=../GameApi/GameApi ../GameApi/GameApi/
 | `tools/fill.cpp` | makes up the unseen parts of the moons' maps |
 | `models/probe/` | NASA's Voyager model in three plain glTF parts, each with its texture; `tools/undraco.py` made them from `models/voyager-probe-b.glb` and put the sunlight in |
 | `screens/` | pictures from the game |
-| `GameApi/` | the engine, as a git submodule |
+| `GameApi/` | the engine, as a git submodule (its `more_stable` branch) |
 | `run.sh` | builds and runs the simulation |
 
 ## Not in the model

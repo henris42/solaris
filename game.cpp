@@ -47,6 +47,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -530,36 +531,59 @@ void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused,
 
 }  // namespace
 
-// GameApi reads models on several threads, and about one start in ten these wait
-// for each other for ever (or one runs out of memory). A watch on the side starts
-// the program afresh when no picture has been drawn for 45 seconds, or when the
-// program is about to stop on an error soon after its start; three times at most.
+// GameApi reads models on several threads, and now and then a start goes wrong:
+// the threads wait for each other for ever, or memory is found broken and the
+// program is stopped. A watch on the side starts the program afresh when no
+// picture has been drawn for 45 seconds, or when the program is about to stop on
+// an error within two minutes of its start; three times at most.
 std::atomic<long> g_drawn{0};  // when the last picture was drawn, seconds on the steady clock
 char** g_args = nullptr;
+char** g_fresh = nullptr;  // the environment of a fresh start, made ready beforehand
+int g_starts = 0;          // how many fresh starts lie behind this one
 long seconds_now() { return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+// Also called when memory is what broke, so it allocates nothing and uses only
+// what a signal handler may use.
 void start_afresh(const char* why) {
-  const char* tries = std::getenv("VOYAGER_STARTS");
-  const int n = tries ? std::atoi(tries) : 0;
-  if (n >= 3) {
-    std::fprintf(stderr, "\n%s, three times over: giving up\n", why);
-    std::_Exit(1);
+  const auto say = [](const char* text) { if (write(2, text, std::strlen(text)) < 0) {} };
+  say("\n");
+  say(why);
+  if (g_starts >= 3) {
+    say(", three times over: giving up\n");
+    _exit(1);
   }
-  std::fprintf(stderr, "\n%s: starting afresh\n", why);
-  setenv("VOYAGER_STARTS", std::to_string(n + 1).c_str(), 1);
-  execv("/proc/self/exe", g_args);
-  std::_Exit(1);
+  say(": starting afresh\n");
+  execve("/proc/self/exe", g_args, g_fresh);
+  _exit(1);
 }
+extern "C" void on_fault(int) { start_afresh("the program broke"); }
+const int kFaults[] = {SIGABRT, SIGSEGV, SIGBUS};
 
 int main(int argc, char** argv) {
   g_args = argv;
+  const char* tries = std::getenv("VOYAGER_STARTS");
+  g_starts = tries ? std::atoi(tries) : 0;
+  static std::string count = "VOYAGER_STARTS=" + std::to_string(g_starts + 1);
+  static std::vector<char*> fresh;
+  for (char** e = environ; *e; ++e) if (std::strncmp(*e, "VOYAGER_STARTS=", 15) != 0) fresh.push_back(*e);
+  fresh.push_back(count.data());
+  fresh.push_back(nullptr);
+  g_fresh = fresh.data();
   g_drawn = seconds_now();
   const long started = seconds_now();
   std::set_terminate([] { start_afresh("the program stopped on an error"); });
+  struct sigaction fault{};
+  fault.sa_handler = on_fault;
+  fault.sa_flags = SA_NODEFER | SA_RESETHAND;  // not blocked in the fresh program; a second fault ends this one
+  for (const int s : kFaults) sigaction(s, &fault, nullptr);
   std::thread([started] {
-    for (;;) {
+    for (bool watching = true;;) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
       if (seconds_now() - g_drawn > 45) start_afresh("no picture for 45 seconds (GameApi's loading has stalled)");
-      if (seconds_now() - started > 120) std::set_terminate(nullptr);  // later errors are not the start's
+      if (watching && seconds_now() - started > 120) {  // later errors are not the start's
+        watching = false;
+        std::set_terminate(nullptr);
+        for (const int s : kFaults) std::signal(s, SIG_DFL);
+      }
     }
   }).detach();
   const std::string home = argc > 2 ? argv[2] : ".";
