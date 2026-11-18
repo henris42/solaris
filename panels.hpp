@@ -1,12 +1,18 @@
 // A layer of flat drawing over the 3D picture: boxes, lines, dots and text, in
-// pixels from the top left of the window. Plain OpenGL (3.3), beside GameApi: it
+// pixels from the top left of the window. Plain OpenGL (3.3; in a browser, WebGL 2), beside GameApi: it
 // draws after GameApi has drawn the scene, and leaves OpenGL as it found it.
 //
 // The letters are glyphs.hpp (DejaVu Sans Mono, written by tools/font.sh).
 #pragma once
+#ifdef __EMSCRIPTEN__
+#include <GLES3/gl3.h>
+#define PANELS_GLSL "#version 300 es\nprecision mediump float;\n"
+#else
 #define GL_GLEXT_PROTOTYPES
 #include <GL/gl.h>
 #include <GL/glext.h>
+#define PANELS_GLSL "#version 330 core\n"
+#endif
 
 #include <cmath>
 #include <cstdio>
@@ -23,12 +29,12 @@ class panels {
 
   bool init() {
     const char* vs =
-        "#version 330 core\n"
+        PANELS_GLSL
         "layout(location = 0) in vec2 at; layout(location = 1) in vec2 glyph; layout(location = 2) in vec4 paint;\n"
         "uniform vec2 window; out vec2 uv; out vec4 col;\n"
         "void main() { uv = glyph; col = paint; gl_Position = vec4(at.x / window.x * 2.0 - 1.0, 1.0 - at.y / window.y * 2.0, 0.0, 1.0); }\n";
     const char* fs =
-        "#version 330 core\n"
+        PANELS_GLSL
         "in vec2 uv; in vec4 col; uniform sampler2D letters; out vec4 o;\n"
         "void main() { float a = uv.x < 0.0 ? 1.0 : texture(letters, uv).r; o = vec4(col.rgb, col.a * a); }\n";
     const auto compile = [](GLenum kind, const char* text) {

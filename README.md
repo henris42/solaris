@@ -184,7 +184,47 @@ It has been played by hand (the scene keys worked) and otherwise run on a virtua
 
 A note on starting. GameApi is used from its `more_stable` branch, which its author recommends (the submodule points there). On its `master` branch about one start in ten failed: the window stayed black at "loading", every thread of the program asleep waiting for another (GameApi reads models on several threads), or the program stopped with an out-of-memory error. On `more_stable`, of some forty starts on the virtual screen none hung, and one stopped in its first seconds with broken memory (`malloc(): unaligned tcache chunk detected`); the next thirty were fine. The first picture also comes ten times sooner. The engine is not changed here; the game keeps a watch on the side instead, which starts the program afresh when no picture has been drawn for 45 seconds, or when it is about to stop on an error or a fault within two minutes of its start, three times at most (`start_afresh` in `game.cpp`). The restart has been seen to work on a fault sent from outside during loading (`kill -ABRT`, `kill -SEGV`); a restart after a real failed start has not come up in a test yet. Keys, clicks and drags are tested on the virtual screen with made-up events (`-DGAME_TEST`, see the top of `game.cpp`).
 
-Building GameApi on Ubuntu: `sudo apt-get install libsdl2-dev libsdl2-mixer-dev libglew-dev libfreetype-dev libopencv-dev` (its own README does not list the last one), then `make -j 8 depbuild` in `GameApi/GameApi`. GameApi asks for an antialiased window, which some X servers give only through EGL; `play.sh` sets `SDL_VIDEO_X11_FORCE_EGL=1` for that.
+### Building the game
+
+For the desktop, on Ubuntu:
+
+```
+sudo apt-get install libsdl2-dev libsdl2-mixer-dev libglew-dev libfreetype-dev libopencv-dev
+(cd GameApi/GameApi && make -j 8 depbuild)     # the engine, about 6 minutes; its own README does not list libopencv-dev
+./run.sh                                       # once: writes the scenes and the models into out/
+./play.sh neptune                              # compiles game.cpp into out/game when it is newer, then plays
+```
+
+`play.sh` compiles with `c++ -std=c++20 -O2 game.cpp -o out/game -IGameApi/GameApi -Iorbit -LGameApi/GameApi -lGameApi -lGL` and runs the result with `LD_LIBRARY_PATH=GameApi/GameApi`. GameApi asks for an antialiased window, which some X servers give only through EGL; `play.sh` sets `SDL_VIDEO_X11_FORCE_EGL=1` for that.
+
+For a browser, as WebAssembly, with Emscripten. Here with Ubuntu 26.04's packages (Emscripten 3.1.69, clang 19):
+
+```
+sudo apt-get install emscripten nodejs
+
+# The packaged Emscripten keeps its cache read-only and without SDL2 and FreeType: give it one it may write to.
+# GameApi's makefile also looks for an emsdk folder: em/sdk stands in for it.
+mkdir -p em/sdk/upstream/emscripten/cache && touch em/sdk/emsdk
+cp -r /usr/share/emscripten/cache em/cache               # 1.6 GB
+ln -s $PWD/em/cache/sysroot em/sdk/upstream/emscripten/cache/sysroot
+sed 's/^FROZEN_CACHE.*/FROZEN_CACHE = False/' /usr/share/emscripten/.emscripten > em/config
+echo "CACHE = '$PWD/em/cache'" >> em/config
+export EM_CONFIG=$PWD/em/config
+
+# clang 19 does not take two calls in a template of GameApi's that nothing uses
+sed -i 's/float pos = first_intersection_float(/float pos = eq.first_intersection_float(/; s/eq\.f(get_x(t,roots\[i\]))/eq.f(eq.get_x(t,roots[i]))/' GameApi/GameApi/Equalizer.hh
+
+# the engine; the first time twice, because the first run starts compiling before its folders are there
+(cd GameApi/GameApi && make -f Makefile.LinuxEm -j 8 EMSCRIPTEN_PATH=$PWD/../../em/sdk/ ; make -f Makefile.LinuxEm -j 8 EMSCRIPTEN_PATH=$PWD/../../em/sdk/)
+
+./run.sh                               # once, as above
+./web.sh                               # game.cpp and the engine into out/web: game.js, game.wasm, game.data
+python3 tools/serve.py . 8791          # then open http://127.0.0.1:8791/out/web/?planet=neptune
+```
+
+With an emsdk of your own, leave out the cache lines and give its folder as `EMSCRIPTEN_PATH`. The engine's objects for the browser go into `GameApi/GameApi/objs` beside the desktop ones (`.bc` beside `.o`). `web.sh` takes GameApi's own link line for its browser program and puts `game.cpp` in the place of that program; the scenes, the surface maps and Voyager's picture record are packed into the page (`game.data`, 13 MB), and the models are fetched from `out/` and `models/probe/` while it runs, which is why the page is served from this folder. The page needs threads, so the server sends the two headers a browser asks for before it allows them (`tools/serve.py` does), and it answers Range requests, which GameApi uses to fetch a file in blocks.
+
+In the browser the game is the same program with three differences, all in `game.cpp` under `__EMSCRIPTEN__`: every model is asked for at the start and the scenes are built in the first frame after the last has arrived (a browser fetches only while the program is not running); the browser calls for each frame; and there is no watch that starts the program afresh. Esc does nothing there. It has been run in Chromium without a screen and in Chrome on Windows with a graphics card (through Direct3D), with keys and the mouse sent by a test program: the pictures look as they do on the desktop. It takes 1.0 GB of memory with Jupiter loaded and 1.3 GB with all four planets, and that did not grow over two minutes of changing planets, cameras and views.
 
 How the game draws, in GameApi's terms: every body is its own model with its own matrix, set anew each frame. GameApi scales each model it loads to 400 units across; the first triangle of each of our files spans the model's box so that this is exact. The stars are drawn first (three files, one for the eye and one for each camera, every star a small square with a soft dot on it; read once and turned into each planet's frame, which GameApi does with three turns worked out and checked at the start), then the bodies with the eye at the spacecraft, each at a distance that keeps their order and with the size that gives its true apparent size, then the spacecraft. A camera is a scaling of the whole picture, 5.4 or 40 times. Sunlight on a body is a second ball over it, turned to the Sun, clear on the day side and darkening to the night side. Sunlight on the spacecraft is in its textures (`tools/undraco.py`). The panels and maps are drawn last, in plain OpenGL (`panels.hpp`), with letters from `glyphs.hpp`.
 
@@ -202,6 +242,7 @@ SDL_VIDEO_X11_FORCE_EGL=1 LD_LIBRARY_PATH=../GameApi/GameApi ../GameApi/GameApi/
 |---|---|
 | `voyager2.cpp` | the simulation: the legs, the comparison, the glTF writer, the game's data |
 | `game.cpp`, `play.sh` | the game, on GameApi |
+| `web.sh`, `web/index.html`, `tools/serve.py` | the game for a browser: the build, its page, and a server to try it with |
 | `panels.hpp`, `glyphs.hpp` | flat drawing over the picture (boxes, lines, text) and its letters; `tools/font.sh` wrote the letters |
 | `orbit/orbit.hpp` | the orbit library (a copy; one header, no dependencies) |
 | `data/` | 38 vector tables from NASA JPL Horizons, the stars to magnitude 9 (`stars.txt`) and Voyager 2's picture record (`shots_*.txt`); `fetch.sh` fetches them again |

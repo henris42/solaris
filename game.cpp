@@ -59,6 +59,10 @@
 #include <vector>
 
 #include <unistd.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <functional>
+#endif
 
 #include "panels.hpp"
 
@@ -67,6 +71,13 @@
 #include "orbit.hpp"
 
 IMPORT extern pthread_t g_main_thread_id;
+#ifdef __EMSCRIPTEN__
+// In a browser (WebAssembly): the models are fetched from the page's server, the browser
+// calls for each frame, and a page that hangs is the browser's to deal with.
+extern int async_pending_count;  // GameApi's count of fetches under way
+IMPORT extern const char* g_html_dir;
+IMPORT const char* get_html_directory2();
+#endif
 
 #ifdef GAME_TEST
 // For testing without hands: GAME_TEST_EVENTS="20,key,51 30,down,900,95 30.1,up,900,95"
@@ -570,6 +581,7 @@ int main(int argc, char** argv) {
   g_fresh = fresh.data();
   g_drawn = seconds_now();
   const long started = seconds_now();
+#ifndef __EMSCRIPTEN__
   std::set_terminate([] { start_afresh("the program stopped on an error"); });
   struct sigaction fault{};
   fault.sa_handler = on_fault;
@@ -587,6 +599,13 @@ int main(int argc, char** argv) {
     }
   }).detach();
   const std::string home = argc > 2 ? argv[2] : ".";
+  const std::string from = "file://" + home;  // where GameApi fetches the models
+#else
+  (void)started;
+  const std::string home;                                // the scenes, the maps and Voyager's pictures are files of the page
+  const std::string from = argc > 2 ? argv[2] : ".";     // the models come from this url
+  g_html_dir = get_html_directory2();
+#endif
   const std::string names[4] = {"jupiter", "saturn", "uranus", "neptune"};
   int current = 3;
   for (int i = 0; i < 4; ++i) if (argc > 1 && names[i] == argv[1]) current = i;
@@ -606,6 +625,9 @@ int main(int argc, char** argv) {
   GameApi::EveryApi ev(env);
   ev.mainloop_api.init_window(w, h, "Voyager 2");
   ev.mainloop_api.set_screen_size(w, h);
+#ifdef __EMSCRIPTEN__
+  ev.mainloop_api.set_homepage_url(from + "/");
+#endif
   ev.shader_api.load_default();
   const GameApi::SH sh = ev.shader_api.colour_shader();
   const GameApi::SH sh2 = ev.shader_api.texture_shader();
@@ -622,8 +644,9 @@ int main(int argc, char** argv) {
   // sunlight on a body is a second ball over it, its pole turned to the Sun, that
   // darkens toward the night side (out/ball-shade.glb with textures/shade.png).
   const auto model = [&](const std::string& file, vec3 light, const std::string& map, bool sky, GameApi::MN& mn) {
-    env.async_load_url("file://" + file, "");  // GameApi draws only files it has fetched beforehand
-    const GameApi::TF tf = ev.mainloop_api.gltf_loadKK2("file://" + file);
+    const std::string url = from + file.substr(home.size());
+    env.async_load_url(url, "");  // GameApi draws only files it has fetched beforehand
+    const GameApi::TF tf = ev.mainloop_api.gltf_loadKK2(url);
     const GameApi::P p = ev.mainloop_api.gltf_mesh_all_p(ev, tf);
     const float lx = static_cast<float>(400.0 * light.x), ly = static_cast<float>(400.0 * light.y), lz = static_cast<float>(400.0 * light.z);
     GameApi::MT mt{};
@@ -671,7 +694,9 @@ int main(int argc, char** argv) {
   // the stars: one field for all four planets, for the eye and for each camera
   GameApi::ML stars[3]{};
   GameApi::MN stars_mn[3]{};
-  for (int cam = 0; cam < 3; ++cam) stars[cam] = model(home + "/out/stars-" + std::to_string(cam + 1) + ".glb", {0, 0, 1}, home + "/out/star-dots.png", true, stars_mn[cam]);
+  const auto load_stars = [&] {
+    for (int cam = 0; cam < 3; ++cam) stars[cam] = model(home + "/out/stars-" + std::to_string(cam + 1) + ".glb", {0, 0, 1}, home + "/out/star-dots.png", true, stars_mn[cam]);
+  };
 
   const auto build = [&](scene& s) {
     std::vector<GameApi::ML> all;
@@ -711,16 +736,24 @@ int main(int argc, char** argv) {
   // texture (tools/undraco.py): each side of each surface as bright as it faces the Sun
   std::vector<GameApi::MN> probe_mn;
   std::vector<GameApi::ML> parts;
-  for (int i = 0; i < 64; ++i) {
+  GameApi::ML probe{};
+  const auto probe_part = [&](int i, std::string& map) {  // the i-th part's model; false when there is none
     char part[64];
     std::snprintf(part, sizeof part, "/models/probe/part-%02d.glb", i);
-    if (!std::ifstream(home + part).good()) break;
-    probe_mn.push_back({});
-    std::string map = home + part;
+    map = home + part;
     map.replace(map.size() - 3, 3, "jpg");
-    parts.push_back(model(home + part, {0.5, 0.6, 0.6}, map, false, probe_mn.back()));
-  }
-  const GameApi::ML probe = ev.mainloop_api.array_ml(ev, parts);
+    return std::ifstream(map).good() ? std::string(part) : std::string();
+  };
+  const auto load_probe = [&] {
+    for (int i = 0; i < 64; ++i) {
+      std::string map;
+      const std::string part = probe_part(i, map);
+      if (part.empty()) break;
+      probe_mn.push_back({});
+      parts.push_back(model(home + part, {0.5, 0.6, 0.6}, map, false, probe_mn.back()));
+    }
+    probe = ev.mainloop_api.array_ml(ev, parts);
+  };
 
   // optional: where to start, in hours from the nearest approach to the planet, and the speed
   // without them: the three-minute tour
@@ -804,11 +837,53 @@ int main(int argc, char** argv) {
     swing = 1.0, own_lens = false;
     off_yaw = 0.1, off_pitch = 0.0, glide_yaw = glide_pitch = 0.0;
   };
-  enter(current);
+  const auto setup = [&] { load_stars(); load_probe(); enter(current); };
+#ifdef __EMSCRIPTEN__
+  // A browser fetches while the program is not running, so every model is asked for
+  // here, and the scenes are built in the first frame after the last has arrived.
+  {
+    std::vector<std::string> files = {"/out/ball-shade.glb", "/out/ring.glb", "/out/stars-1.glb", "/out/stars-2.glb", "/out/stars-3.glb"};
+    for (const scene& s : scenes)
+      for (const body& b : s.bodies) if (b.name != "Earth") files.push_back("/out/ball-" + lower(b.name) + ".glb");
+    for (int i = 0; i < 64; ++i) {
+      std::string map;
+      const std::string part = probe_part(i, map);
+      if (part.empty()) break;
+      files.push_back(part);
+    }
+    std::sort(files.begin(), files.end());
+    files.erase(std::unique(files.begin(), files.end()), files.end());
+    for (const std::string& f : files) env.async_load_url(from + f, from + "/");
+  }
+  int quiet = 0;       // frames in a row without a fetch under way
+  bool ready = false;
+#else
+  setup();
+#endif
 
   auto before = std::chrono::steady_clock::now();
   double shown = -1.0;
-  for (bool run = true; run;) {
+  bool run = true;
+  const auto frame = [&] {
+#ifdef __EMSCRIPTEN__
+    if (!ready) {
+      quiet = async_pending_count > 0 ? 0 : quiet + 1;
+      if (quiet < 20) {
+        ev.mainloop_api.clear_3d(0xff000000);
+        if (ui_ok) {
+          ui.start();
+          const std::string wait = "fetching the models ...";
+          ui.text((static_cast<float>(ui.width) - panels::text_width(wait)) / 2, static_cast<float>(ui.height) / 2, wait, kInk);
+          ui.draw();
+        }
+        ev.mainloop_api.swapbuffers();
+        return;
+      }
+      setup();
+      ready = true;
+      before = std::chrono::steady_clock::now();
+    }
+#endif
     const auto now = std::chrono::steady_clock::now();
     const double dt = std::min(0.25, std::chrono::duration<double>(now - before).count());
     before = now;
@@ -1024,7 +1099,14 @@ int main(int argc, char** argv) {
                   at ? glass::orbit::norm(at->pos) : 0.0, rate, paused ? "(paused)" : "        ");
       std::fflush(stdout);
     }
-  }
+  };
+#ifdef __EMSCRIPTEN__
+  static std::function<void()> step;
+  step = frame;
+  emscripten_set_main_loop([] { step(); }, 0, true);  // does not come back; what is above stays in place
+#else
+  while (run) frame();
+#endif
   std::printf("\n");
   return 0;
 }
