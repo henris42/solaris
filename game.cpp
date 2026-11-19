@@ -14,6 +14,7 @@
 //                         camera pointed, through the camera that took each (NASA's record of all of them)
 //   z                     by eye, through Voyager's wide-angle camera (3.2 degrees), through its narrow-angle camera (0.42 degrees)
 //   v, m, i               the spacecraft, the maps, the data panels: on or off
+//   l k                   the picture lighter, darker (for the dark moons: Callisto reflects a fifth of its sunlight)
 //   j s u n               Jupiter, Saturn, Uranus, Neptune       r   start of the scene       Esc   quit
 //
 // The tour (on at the start): each system in three minutes, from arrival to
@@ -446,7 +447,7 @@ void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused,
       ui.text(x + (w - panels::text_width(kPlanets[i])) / 2, y + 4, kPlanets[i], here ? kAmber : kInk);
     }
     // the keys
-    const char* keys[4] = {"drag: turn about the spacecraft   wheel: nearer, farther   c: back", "click a name, or Tab: look at it   , . previous, next flyby   f: the planet",
+    const char* keys[4] = {"drag: turn about the spacecraft   wheel: nearer, farther   c: back   l k: light", "click a name, or Tab: look at it   , . previous, next flyby   f: the planet",
                            "1-9: speed (1 real time)   t: tour pace   space: pause   a: Voyager's own pictures", "z: camera   v: spacecraft   m: map   i: data   j s u n: planets   Esc"};
     for (int i = 0; i < 4; ++i) ui.text(W - 16 - panels::text_width(keys[i]), H - 16 - lh * static_cast<float>(4 - i), keys[i], kMuted);
     ui.draw();
@@ -603,7 +604,7 @@ int main(int argc, char** argv) {
 #else
   (void)started;
   const std::string home;                                // the scenes, the maps and Voyager's pictures are files of the page
-  const std::string from = argc > 2 ? argv[2] : ".";     // the models come from this url
+  const std::string from = argc > 2 ? argv[2] : ".";     // the models come from this url: the page's own folder
   g_html_dir = get_html_directory2();
 #endif
   const std::string names[4] = {"jupiter", "saturn", "uranus", "neptune"};
@@ -762,6 +763,7 @@ int main(int argc, char** argv) {
   const bool tour = argc <= 3;  // started without a time: the tour, from arrival to departure
   bool paced = tour;        // time at the tour's own pace (slow near things), or at one rate
   bool craft = true, show_map = true, show_data = true;
+  int light = 0;  // steps of the picture's brightness: each a factor of the square root of 2
   panels ui;
   const bool ui_ok = ui.init();
   const std::size_t none = static_cast<std::size_t>(-1);
@@ -907,6 +909,8 @@ int main(int argc, char** argv) {
         if (e.ch == 'v') craft = !craft;
         if (e.ch == 'm') show_map = !show_map;
         if (e.ch == 'i') show_data = !show_data;
+        if (e.ch == 'l') light = std::min(light + 1, 8);   // to 16 times
+        if (e.ch == 'k') light = std::max(light - 1, -4);  // to a quarter
         if (e.ch == 'z') { zoom = zoom < 2.0 ? 5.4 : zoom < 10.0 ? 40.0 : 1.0; own_lens = true; }
         if (e.ch == 'c') homing = true;
         if (e.ch == 'a') {
@@ -1085,9 +1089,11 @@ int main(int argc, char** argv) {
       marked = none;
       for (std::size_t i : c.flybys) if (c.bodies[i].name == shot->target || c.bodies[i].name + " Rings" == shot->target) marked = i;
     }
-    if (ui_ok)
+    if (ui_ok) {
+      if (light != 0) ui.start(), ui.light(static_cast<float>(std::pow(2.0, light * 0.5)));  // before the panels, which keep their own brightness
       draw_panels(ui, c, t, rate, paused, marked, zoom, show_data, show_map, paced ? c.played[std::min(c.played.size() - 1, static_cast<std::size_t>(t / c.step))] : -1.0, shot,
                   shot ? static_cast<std::size_t>(shot - c.shots.data()) + 1 : 0);
+    }
     ev.mainloop_api.swapbuffers();
     g_drawn = seconds_now();
 

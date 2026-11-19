@@ -1,16 +1,29 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>Voyager 2</title>
-<style>body { margin: 0; background: #000; } canvas { display: block; }</style>
+<style>body { margin: 0; background: #000; color: #9aa; font: 14px sans-serif; } canvas { display: block; }</style>
 <canvas id="canvas" width="1280" height="800" tabindex="0"></canvas>
 <script>
 // Voyager 2 in the browser.  ?planet=jupiter|saturn|uranus|neptune
-// The page is served from out/web/ of the folder that also holds out/ and models/.
-var Module = {
-  arguments: [new URLSearchParams(location.search).get('planet') || 'neptune', location.origin],
-  canvas: document.getElementById('canvas'),
-  print: t => console.log(t),
-  printErr: t => console.error(t),
-};
+// Everything the page needs is in its own folder: game.js, game.wasm, game.data, out/, models/.
+// The game runs on several threads, which a browser allows only to a page served with two
+// headers. Where the server does not send them, sw.js adds them: it is registered here and
+// the page loaded once more.
+if (!crossOriginIsolated && 'serviceWorker' in navigator && !sessionStorage.getItem('voyager-sw')) {
+  sessionStorage.setItem('voyager-sw', '1');
+  navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(() => location.reload());
+} else if (!crossOriginIsolated) {
+  document.body.append('This page needs a browser that lets it run threads (a recent Chrome, Edge, Firefox or Safari, over https).');
+} else {
+  sessionStorage.removeItem('voyager-sw');
+  window.Module = {
+    arguments: [new URLSearchParams(location.search).get('planet') || 'neptune', new URL('.', location.href).href.replace(/\/$/, '')],
+    canvas: document.getElementById('canvas'),
+    print: t => console.log(t),
+    printErr: t => console.error(t),
+  };
+  const s = document.createElement('script');
+  s.src = 'game.js';
+  document.body.appendChild(s);
+}
 </script>
-<script src="game.js"></script>

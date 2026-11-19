@@ -162,6 +162,7 @@ On the screen, besides the picture:
 | `a` | autonomous: follow what Voyager 2 photographed (see above) |
 | `z` | by eye, wide-angle camera, narrow-angle camera |
 | `v`, `m`, `i` | the spacecraft, the maps, the data panels: on or off |
+| `l`, `k` | the picture lighter, darker |
 | `j` `s` `u` `n` | Jupiter, Saturn, Uranus, Neptune |
 | `r`, Esc | start of the scene, quit |
 
@@ -218,11 +219,13 @@ sed -i 's/float pos = first_intersection_float(/float pos = eq.first_intersectio
 (cd GameApi/GameApi && make -f Makefile.LinuxEm -j 8 EMSCRIPTEN_PATH=$PWD/../../em/sdk/ ; make -f Makefile.LinuxEm -j 8 EMSCRIPTEN_PATH=$PWD/../../em/sdk/)
 
 ./run.sh                               # once, as above
-./web.sh                               # game.cpp and the engine into out/web: game.js, game.wasm, game.data
-python3 tools/serve.py . 8791          # then open http://127.0.0.1:8791/out/web/?planet=neptune
+./web.sh                               # game.cpp and the engine into web/: game.js, game.wasm, game.data, and the models
+python3 tools/serve.py web 8791        # then open http://127.0.0.1:8791/?planet=neptune
 ```
 
-With an emsdk of your own, leave out the cache lines and give its folder as `EMSCRIPTEN_PATH`. The engine's objects for the browser go into `GameApi/GameApi/objs` beside the desktop ones (`.bc` beside `.o`). `web.sh` takes GameApi's own link line for its browser program and puts `game.cpp` in the place of that program; the scenes, the surface maps and Voyager's picture record are packed into the page (`game.data`, 13 MB), and the models are fetched from `out/` and `models/probe/` while it runs, which is why the page is served from this folder. The page needs threads, so the server sends the two headers a browser asks for before it allows them (`tools/serve.py` does), and it answers Range requests, which GameApi uses to fetch a file in blocks.
+With an emsdk of your own, leave out the cache lines and give its folder as `EMSCRIPTEN_PATH`. The engine's objects for the browser go into `GameApi/GameApi/objs` beside the desktop ones (`.bc` beside `.o`). `web.sh` takes GameApi's own link line for its browser program and puts `game.cpp` in the place of that program. The scenes, the surface maps and Voyager's picture record are packed into the page (`game.data`, 13 MB); the models are copied to `web/out` and `web/models/probe` and fetched while it runs.
+
+To publish it, copy the `web` folder to a web server: after `./web.sh` it holds everything the page needs, 103 MB, and the page finds its files beside itself wherever the folder is put. Two things the page asks of a server. It runs on several threads, which a browser allows only to a page that comes with two headers (`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`); where the server does not send them, `web/sw.js` adds them in the browser, at the cost of loading the page twice the first time, and that needs https (or localhost). And GameApi fetches a model in blocks with Range requests, which most servers answer. `tools/serve.py` does both. The built files in `web` are not in the repository.
 
 In the browser the game is the same program with three differences, all in `game.cpp` under `__EMSCRIPTEN__`: every model is asked for at the start and the scenes are built in the first frame after the last has arrived (a browser fetches only while the program is not running); the browser calls for each frame; and there is no watch that starts the program afresh. Esc does nothing there. It has been run in Chromium without a screen and in Chrome on Windows with a graphics card (through Direct3D), with keys and the mouse sent by a test program: the pictures look as they do on the desktop. It takes 1.0 GB of memory with Jupiter loaded and 1.3 GB with all four planets, and that did not grow over two minutes of changing planets, cameras and views.
 
@@ -242,7 +245,7 @@ SDL_VIDEO_X11_FORCE_EGL=1 LD_LIBRARY_PATH=../GameApi/GameApi ../GameApi/GameApi/
 |---|---|
 | `voyager2.cpp` | the simulation: the legs, the comparison, the glTF writer, the game's data |
 | `game.cpp`, `play.sh` | the game, on GameApi |
-| `web.sh`, `web/index.html`, `tools/serve.py` | the game for a browser: the build, its page, and a server to try it with |
+| `web.sh`, `web/index.html`, `web/sw.js`, `tools/serve.py` | the game for a browser: the build, its page, the headers for servers that do not send them, and a server to try it with |
 | `panels.hpp`, `glyphs.hpp` | flat drawing over the picture (boxes, lines, text) and its letters; `tools/font.sh` wrote the letters |
 | `orbit/orbit.hpp` | the orbit library (a copy; one header, no dependencies) |
 | `data/` | 38 vector tables from NASA JPL Horizons, the stars to magnitude 9 (`stars.txt`) and Voyager 2's picture record (`shots_*.txt`); `fetch.sh` fetches them again |

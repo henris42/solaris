@@ -14,6 +14,7 @@
 #define PANELS_GLSL "#version 330 core\n"
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -135,6 +136,23 @@ class panels {
   }
   static float text_width(const std::string& s) { return static_cast<float>(s.size()) * static_cast<float>(kGlyphW); }
 
+  // Makes the whole picture drawn so far lighter (gain above 1) or darker (below 1): what comes
+  // after it, such as the panels, is not touched. A step can at most double, so more takes several.
+  void light(float gain) {
+    v_.clear();
+    const auto w = static_cast<float>(width), h = static_cast<float>(height);
+    while (gain > 1.001f) {
+      const float f = std::min(gain, 2.0f);
+      box(0, 0, w, h, {f - 1, f - 1, f - 1, 1});
+      blend_ = add_to_itself, draw(), blend_ = over;
+      gain /= f;
+    }
+    if (gain < 0.999f) {
+      box(0, 0, w, h, {gain, gain, gain, 1});
+      blend_ = times, draw(), blend_ = over;
+    }
+  }
+
   // Draws what has been put since the last call; with a rectangle, only inside it.
   void draw(const float* inside = nullptr) {
     if (v_.empty()) return;
@@ -154,7 +172,9 @@ class panels {
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_CULL_FACE);
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    if (blend_ == over) glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    if (blend_ == add_to_itself) glBlendFuncSeparate(GL_DST_COLOR, GL_ONE, GL_ZERO, GL_ONE);  // picture * colour + picture
+    if (blend_ == times) glBlendFuncSeparate(GL_ZERO, GL_SRC_COLOR, GL_ZERO, GL_ONE);         // picture * colour
     if (inside) {
       glEnable(GL_SCISSOR_TEST);
       glScissor(static_cast<GLint>(inside[0]), height - static_cast<GLint>(inside[1] + inside[3]), static_cast<GLsizei>(inside[2]), static_cast<GLsizei>(inside[3]));
@@ -195,5 +215,6 @@ class panels {
     for (const float f : {x, y, u, v, c.r, c.g, c.b, c.a}) v_.push_back(f);
   }
   GLuint program_ = 0, vao_ = 0, vbo_ = 0, letters_ = 0;
+  enum { over, add_to_itself, times } blend_ = over;
   std::vector<float> v_;
 };
