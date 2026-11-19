@@ -16,7 +16,7 @@ G=${GAMEAPI_WASM:-$V/GameApi/GameApi}
 [ -f out/neptune.scene ] || ./run.sh
 S=out/web-files
 mkdir -p $S/out $S/textures $S/data $S/models/probe web/out web/models/probe
-cp out/*.scene out/star-dots.png $S/out/
+cp out/*.scene out/star-dots.png out/star-names.txt $S/out/
 cp textures/*.jpg textures/*.png $S/textures/
 cp data/shots_*.txt $S/data/
 cp models/probe/*.jpg $S/models/probe/

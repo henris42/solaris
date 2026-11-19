@@ -14,6 +14,7 @@
 //                         camera pointed, through the camera that took each (NASA's record of all of them)
 //   z                     by eye, through Voyager's wide-angle camera (3.2 degrees), through its narrow-angle camera (0.42 degrees)
 //   v, m, i               the spacecraft, the maps, the data panels: on or off
+//   b                     the names of the well-known bright stars: on or off
 //   l k                   the picture lighter, darker (for the dark moons: Callisto reflects a fifth of its sunlight)
 //   j s u n               Jupiter, Saturn, Uranus, Neptune       r   start of the scene       Esc   quit
 //
@@ -27,7 +28,8 @@
 //
 // What is true to life: the direction and the apparent size of every body at every
 // moment (from out/<planet>.scene, written by the simulation), the stars (the
-// Hipparcos catalogue: each star a dot at its measured place, as bright and of the colour measured; to magnitude 6.5 for the eye, deeper
+// Hipparcos catalogue: each star one pixel of light at its measured place, as bright and of the colour measured, the well-known
+// ones with their names beside them; to magnitude 6.5 for the eye, deeper
 // through the cameras; one star field for all four planets, at 1984), the surface maps in visible light,
 // the planet's turning, which side of each body is in sunlight, the spacecraft's
 // shape with its dish toward the Earth, the fields of its two cameras. What is not:
@@ -57,6 +59,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <optional>
 #include <vector>
 
 #include <unistd.h>
@@ -113,6 +116,16 @@ void test_events(double dt) {
 #endif
 
 using glass::orbit::orbit_sample;
+
+// Where a body is at t, from the spacecraft. Past the end of what the simulation wrote, every
+// body keeps the velocity it had there: the spacecraft just flies on.
+std::optional<glass::orbit::orbit_state> where(const std::vector<orbit_sample>& path, double t) {
+  if (path.size() < 2 || t <= path.back().t) return glass::orbit::state_at(std::span<const orbit_sample>(path), t, 8);
+  auto last = glass::orbit::state_at(std::span<const orbit_sample>(path), path.back().t, 8);
+  if (last) last->pos = last->pos + (t - path.back().t) * last->vel;
+  return last;
+}
+
 using glass::orbit::vec3;
 
 namespace {
@@ -268,7 +281,7 @@ void read_shots(const std::string& file, scene& s) {
   for (const scene::shot& k : s.shots)
     for (const body& b : s.bodies) {
       if (b.name != k.target) continue;
-      const auto at = glass::orbit::state_at(std::span<const orbit_sample>(b.path), k.t, 8);
+      const auto at = where(b.path, k.t);
       if (!at) continue;
       const vec3 d = (1.0 / glass::orbit::norm(at->pos)) * at->pos;
       const double apart = std::acos(std::clamp(d.x * k.dir.x + d.z * k.dir.y - d.y * k.dir.z, -1.0, 1.0)) * 180.0 / kPi;
@@ -284,7 +297,7 @@ void read_shots(const std::string& file, scene& s) {
 double slowness(const scene& c, double t) {
   double slow = 0.0;
   for (std::size_t i : c.flybys) {
-    const auto at = glass::orbit::state_at(std::span<const orbit_sample>(c.bodies[i].path), t, 8);
+    const auto at = where(c.bodies[i].path, t);
     if (!at) continue;
     const double d = glass::orbit::norm(at->pos);
     slow += i == 0 ? c.near_planet / d : c.near_body[i] * std::pow(c.bodies[i].nearest / d, 2);
@@ -299,7 +312,7 @@ std::size_t sight(const scene& c, double t) {
   while (k < c.turns.size() && t >= c.turns[k]) ++k;
   const std::size_t i = c.flybys[k];
   if (i == 0) return 0;
-  const auto at = glass::orbit::state_at(std::span<const orbit_sample>(c.bodies[i].path), t, 8);
+  const auto at = where(c.bodies[i].path, t);
   return at && glass::orbit::norm(at->pos) < 2.0 * c.bodies[i].nearest ? i : 0;
 }
 
@@ -311,8 +324,17 @@ std::string date_at(const scene& s, double t) {
   long minutes = static_cast<long>(t / 60.0) + h * 60 + mi;
   d += static_cast<int>(minutes / 1440);
   minutes %= 1440;
+  // on into the following months and years: the spacecraft flies on past the end of a scene
+  const char* months[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+  int m = 0;
+  while (m < 11 && std::strncmp(months[m], mon, 3) != 0) ++m;
+  const auto days_in = [](int month, int year) { return month == 1 ? (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) ? 29 : 28) : (month == 3 || month == 5 || month == 8 || month == 10 ? 30 : 31); };
+  while (d > days_in(m, y)) {
+    d -= days_in(m, y);
+    if (++m == 12) m = 0, ++y;
+  }
   char b[64];
-  std::snprintf(b, sizeof b, "%d %s %d %02ld:%02ld", d, mon, y, minutes / 60, minutes % 60);
+  std::snprintf(b, sizeof b, "%d %s %d %02ld:%02ld", d, months[m], y, minutes / 60, minutes % 60);
   return b;
 }
 
@@ -367,12 +389,21 @@ int planet_at(const panels& ui, float px, float py) {
   return -1;
 }
 
+// A well-known star in the picture: where its dot is, and its name.
+struct star_label {
+  float x, y;
+  const std::string* name;
+};
+
 void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused, std::size_t target, double zoom, bool data, bool map, double tour_at, const scene::shot* shot,
-                 std::size_t shot_number) {
+                 std::size_t shot_number, const std::vector<star_label>& named) {
   ui.start();
+  // the names of the bright stars: small and faint, a little to the right of the star, under everything else
+  for (const star_label& l : named) ui.text(l.x + 9, l.y - static_cast<float>(kGlyphH) / 2, *l.name, colour{0.60f, 0.66f, 0.74f, 0.42f});
+  ui.draw();  // now: they show with the panels off too
   const auto W = static_cast<float>(ui.width), H = static_cast<float>(ui.height);
   const body& planet = c.bodies[0];
-  const auto p = glass::orbit::state_at(std::span<const orbit_sample>(planet.path), t, 8);
+  const auto p = where(planet.path, t);
   if (!p) return;
   const float lh = 20.0f, pad = 12.0f, cw = static_cast<float>(kGlyphW);
 
@@ -397,7 +428,7 @@ void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused,
     }
     if (tour_at >= 0.0) {
       std::snprintf(b, sizeof b, "%d:%02d of 3:00", static_cast<int>(tour_at) / 60, static_cast<int>(tour_at) % 60);
-      rows.push_back({"tour", b});
+      rows.push_back({"tour", t > c.length ? "over: flying on" : b});
     }
     const float w = 48.0f * cw + 2.0f * pad, h = lh * (static_cast<float>(rows.size()) + 1.0f) + 2.0f * pad;
     ui.box(16, 16, w, h, kPanel);
@@ -422,7 +453,7 @@ void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused,
     ui.text(col[3] - panels::text_width("nearest"), 16 + pad, "nearest", kMuted);
     for (std::size_t k = 0; k < c.flybys.size(); ++k) {
       const body& m = c.bodies[c.flybys[k]];
-      const auto at = glass::orbit::state_at(std::span<const orbit_sample>(m.path), t, 8);
+      const auto at = where(m.path, t);
       const float y = 16 + pad + lh * (static_cast<float>(k) + 1.0f);
       const colour ink = c.flybys[k] == target ? kAmber : kInk;
       if (c.flybys[k] == target) ui.text(tx + pad, y, ">", kAmber);
@@ -452,7 +483,7 @@ void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused,
     }
     // the keys
     const char* keys[4] = {"drag: turn about the spacecraft   wheel: nearer, farther   c: back   l k: light", "click a name, or Tab: look at it   , . previous, next flyby   f: the planet",
-                           "1-9: speed (1 real time)   t: tour pace   space: pause   a: Voyager's own pictures", "z: camera   v: spacecraft   m: map   i: data   j s u n: planets   Esc"};
+                           "1-9: speed (1 real time)   t: tour pace   space: pause   a: Voyager's own pictures", "z: camera   v: spacecraft   m: map   i: data   b: star names   j s u n: planets   Esc"};
     for (int i = 0; i < 4; ++i) ui.text(W - 16 - panels::text_width(keys[i]), H - 16 - lh * static_cast<float>(4 - i), keys[i], kMuted);
     ui.draw();
   }
@@ -510,7 +541,7 @@ void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused,
       for (std::size_t i : c.flybys) {
         if (i == 0) continue;
         const body& m = c.bodies[i];
-        const auto ms = glass::orbit::state_at(std::span<const orbit_sample>(m.path), t, 8);
+        const auto ms = where(m.path, t);
         if (!ms) continue;
         at(ms->pos - p->pos, x, y);
         ui.dot(x, y, 2.6f, i == target ? kAmber : kInk);
@@ -521,7 +552,7 @@ void draw_panels(panels& ui, const scene& c, double t, double rate, bool paused,
       ui.dot(x, y, 2.6f, kAmber);
       // where the sunlight comes from
       const body& sun = c.bodies[1];
-      if (const auto ss = glass::orbit::state_at(std::span<const orbit_sample>(sun.path), t, 8)) {
+      if (const auto ss = where(sun.path, t)) {
         const vec3 q = ss->pos - p->pos;
         const double u = q.x * ax + q.y * ay, v = view == 0 ? -q.x * ay + q.y * ax : q.z, l = std::hypot(u, v);
         if (l > 0.2 * glass::orbit::norm(q)) {
@@ -699,6 +730,22 @@ int main(int argc, char** argv) {
   // the stars: one field for all four planets, for the eye and for each camera
   GameApi::ML stars[3]{};
   GameApi::MN stars_mn[3]{};
+  // the well-known bright stars (out/star-names.txt: name, right ascension and declination in degrees, magnitude)
+  struct named_star {
+    std::string name;
+    vec3 dir;  // celestial axes
+  };
+  std::vector<named_star> bright;
+  {
+    std::ifstream f(home + "/out/star-names.txt");
+    std::string name;
+    double ra = 0, dec = 0, mag = 0;
+    while (f >> name >> ra >> dec >> mag) {
+      for (char& ch : name) if (ch == '_') ch = ' ';
+      const double a = ra * kPi / 180.0, b = dec * kPi / 180.0;
+      bright.push_back({name, {std::cos(b) * std::cos(a), std::cos(b) * std::sin(a), std::sin(b)}});
+    }
+  }
   const auto load_stars = [&] {
     for (int cam = 0; cam < 3; ++cam) stars[cam] = model(home + "/out/stars-" + std::to_string(cam + 1) + ".glb", {0, 0, 1}, home + "/out/star-dots.png", true, stars_mn[cam]);
   };
@@ -767,6 +814,7 @@ int main(int argc, char** argv) {
   const bool tour = argc <= 3;  // started without a time: the tour, from arrival to departure
   bool paced = tour;        // time at the tour's own pace (slow near things), or at one rate
   bool craft = true, show_map = true, show_data = true;
+  bool show_names = true;  // the bright stars' names
   int light = 0;  // steps of the picture's brightness: each a factor of the square root of 2
   panels ui;
   const bool ui_ok = ui.init();
@@ -802,7 +850,7 @@ int main(int argc, char** argv) {
     pitch = -std::atan2(d.y, z1);
   };
   const auto toward = [&](const body& b, double& yaw, double& pitch) {
-    const auto at = glass::orbit::state_at(std::span<const orbit_sample>(b.path), t, 8);
+    const auto at = where(b.path, t);
     if (at) ahead(to_view((1.0 / glass::orbit::norm(at->pos)) * at->pos), yaw, pitch);
   };
   const auto nearer = [](double to, double from) { return std::remainder(to - from, 2.0 * kPi); };  // the short way round
@@ -913,6 +961,7 @@ int main(int argc, char** argv) {
         if (e.ch == 'v') craft = !craft;
         if (e.ch == 'm') show_map = !show_map;
         if (e.ch == 'i') show_data = !show_data;
+        if (e.ch == 'b') show_names = !show_names;
         if (e.ch == 'l') light = std::min(light + 1, 8);   // to 16 times
         if (e.ch == 'k') light = std::max(light - 1, -4);  // to a quarter
         if (e.ch == 'z') { zoom = zoom < 2.0 ? 5.4 : zoom < 10.0 ? 40.0 : 1.0; own_lens = true; }
@@ -967,7 +1016,7 @@ int main(int argc, char** argv) {
 
     scene& c = scenes[current];
     // time: the tour's own pace, or one rate
-    const double rate = paced ? pace / slowness(c, t) : speed;
+    const double rate = paced ? pace / slowness(c, std::min(t, c.length)) : speed;  // past the end of the tour, the rate it ended with
     {  // the view goes with the flybys, whatever the pace
       const std::size_t see = sight(c, t);
       if (see != tour_sight) {  // the tour moves on: the view goes with it
@@ -978,7 +1027,7 @@ int main(int argc, char** argv) {
       }
     }
     if (!paused) t += rate * dt;
-    if (t > c.length || t < 0.0) t = 0.0;
+    if (t < 0.0) t = 0.0;  // past the end of the scene the spacecraft flies on (r starts the scene again)
 
     // the view: on the focus, after a swing of a second and a half
     double to_yaw = aim_yaw, to_pitch = aim_pitch;
@@ -1021,7 +1070,7 @@ int main(int argc, char** argv) {
     // the camera Voyager would use for a body of this size in the sky: the picture
     // at most four fifths of the camera's field (0.42 and 3.2 degrees), else the eye
     if (!own_lens) {
-      const auto at = glass::orbit::state_at(std::span<const orbit_sample>(c.bodies[focus].path), t, 8);
+      const auto at = where(c.bodies[focus].path, t);
       const double across = at ? 2.0 * std::asin(std::min(1.0, c.bodies[focus].radius / glass::orbit::norm(at->pos))) * 180.0 / kPi : 90.0;
       if (zoom > 10.0) { if (across > 0.36) zoom = 5.4; }
       else if (zoom > 1.0) { if (across < 0.28) zoom = 40.0; else if (across > 2.7) zoom = 1.0; }
@@ -1032,7 +1081,7 @@ int main(int argc, char** argv) {
     // every body where and as large as it looks from the spacecraft
     vec3 to_earth{0, 1, 0};
     for (body& b : c.bodies) {
-      const auto at = glass::orbit::state_at(std::span<const orbit_sample>(b.path), t, 8);
+      const auto at = where(b.path, t);
       if (!at) continue;
       const double dist = glass::orbit::norm(at->pos);
       vec3 dir = to_view((1.0 / dist) * at->pos);
@@ -1080,6 +1129,16 @@ int main(int argc, char** argv) {
     const GameApi::M lens = ev.matrix_api.scale(power, power, 1.0f);
     const int cam = lens_now < 2.3 ? 0 : lens_now < 14.7 ? 1 : 2;  // the star field made for the nearest lens
     ev.move_api.set_matrix(stars_mn[cam], ev.matrix_api.mult(ev.matrix_api.scale(kSky / kBall, kSky / kBall, kSky / kBall), c.sky));
+    // where the named stars are in the picture: through the same turns and the same lens as their dots
+    std::vector<star_label> labels;
+    if (show_names && lens_now < 14.7)
+      for (const named_star& n : bright) {
+        const vec3 v = moved(look, moved(c.sky, to_view(n.dir)));
+        if (v.z > -1e-6) continue;  // behind the eye
+        const double f = h / 2.0 * power;  // GameApi's 90 degrees from top to bottom, times the lens
+        const double x = w / 2.0 + f * v.x / -v.z, y = h / 2.0 - f * v.y / -v.z;
+        if (x > 0 && x < w && y > 0 && y < h) labels.push_back({static_cast<float>(x), static_cast<float>(y), &n.name});
+      }
     glDepthMask(GL_FALSE);  // the stars are behind everything and do not hide each other
     ev.mainloop_api.execute_ml(ev, stars[cam], sh, sh2, sh2, sh3, look, lens, look, w, h);
     glDepthMask(GL_TRUE);
@@ -1097,7 +1156,7 @@ int main(int argc, char** argv) {
     if (ui_ok) {
       if (light != 0) ui.start(), ui.light(static_cast<float>(std::pow(2.0, light * 0.5)));  // before the panels, which keep their own brightness
       draw_panels(ui, c, t, rate, paused, marked, zoom, show_data, show_map, paced ? c.played[std::min(c.played.size() - 1, static_cast<std::size_t>(t / c.step))] : -1.0, shot,
-                  shot ? static_cast<std::size_t>(shot - c.shots.data()) + 1 : 0);
+                  shot ? static_cast<std::size_t>(shot - c.shots.data()) + 1 : 0, labels);
     }
     ev.mainloop_api.swapbuffers();
     g_drawn = seconds_now();
@@ -1105,7 +1164,7 @@ int main(int argc, char** argv) {
     if (std::fabs(t - shown) > rate * 0.5 || shown < 0.0) {
       shown = t;
       const body& p = c.bodies[0];
-      const auto at = glass::orbit::state_at(std::span<const orbit_sample>(p.path), t, 8);
+      const auto at = where(p.path, t);
       std::printf("\r%-8s %s   %10.0f km from the centre   time x %-6.0f %s   ", c.planet.c_str(), date_at(c, t).c_str(),
                   at ? glass::orbit::norm(at->pos) : 0.0, rate, paused ? "(paused)" : "        ");
       std::fflush(stdout);

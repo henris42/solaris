@@ -45,6 +45,7 @@ using namespace glass::orbit;
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
+constexpr int kStarRows = 16;  // rows of brightness in out/star-dots.png
 constexpr double kAu = 149'597'870'700.0;  // m
 #ifndef VOYAGER2_EINSTEIN
 #define VOYAGER2_EINSTEIN 1
@@ -660,21 +661,22 @@ int main(int argc, char** argv) {
   // the wide-angle and narrow-angle cameras (to 8 and 9), whose squares are that
   // many times smaller, since a camera magnifies them again.
   // out/star-dots.png: the dots. Eight columns of colour (blue-white to orange,
-  // by B-V), eight rows of brightness.
+  // by B-V), sixteen rows of brightness, each three quarters as solid as the next.
   {
     const int tile = 8;
     const double tint[8][3] = {{179, 202, 255}, {204, 219, 255}, {236, 238, 255}, {255, 243, 239}, {255, 228, 206}, {255, 215, 177}, {255, 203, 152}, {255, 190, 122}};
     std::string dots;  // rows from the top: red, green, blue, opacity
-    for (int y = 0; y < 8 * tile; ++y)
+    for (int y = 0; y < kStarRows * tile; ++y)
       for (int x = 0; x < 8 * tile; ++x) {
         const double dx = x % tile + 0.5 - tile / 2.0, dy = y % tile + 0.5 - tile / 2.0, sigma = tile / 6.0;
-        const double g = std::max(0.0, std::exp(-(dx * dx + dy * dy) / (2.0 * sigma * sigma)) - 0.02) / 0.98;
+        (void)sigma;
+        const double g = std::clamp(tile / 2.0 - std::sqrt(dx * dx + dy * dy), 0.0, 1.0);  // solid, with a soft last texel: the dot is a pixel, and a pixel has no inside to shade
         const double* c = tint[x / tile];
         // the eye sees little colour in a point of light: the tint at 40 %
         for (int k : {0, 1, 2}) dots.push_back(static_cast<char>(static_cast<unsigned char>(255.0 + 0.4 * (c[k] - 255.0))));
-        dots.push_back(static_cast<char>(static_cast<unsigned char>(255.0 * g * (y / tile + 1) / 8.0 + 0.5)));
+        dots.push_back(static_cast<char>(static_cast<unsigned char>(255.0 * g * std::pow(0.75, kStarRows - 1 - y / tile) + 0.5)));
       }
-    write_png(out + "/star-dots.png", 8 * tile, 8 * tile, dots);
+    write_png(out + "/star-dots.png", 8 * tile, kStarRows * tile, dots);
   }
   struct star { double ra, dec, mag, bv, pm_ra, pm_dec, parallax; };
   std::vector<star> stars;
@@ -683,7 +685,8 @@ int main(int argc, char** argv) {
     star s{};
     while (f >> s.ra >> s.dec >> s.mag >> s.bv >> s.pm_ra >> s.pm_dec >> s.parallax) stars.push_back(s);
   }
-  const double reach[3] = {6.5, 8.0, 9.0}, lens[3] = {1.0, 5.4, 40.0};
+  // `full`: the magnitude from which a dot is fully solid (a camera gathers more light).
+  const double reach[3] = {6.5, 8.0, 9.0}, full[3] = {2.0, 3.5, 5.0}, lens[3] = {1.0, 5.4, 40.0};
   for (int cam = 0; cam < 3; ++cam) {
     part p{"stars", {1.0f, 1.0f, 1.0f}, "", 2, {}, {}, {}, {}};
     put(p, {-1, -1, -1}, {0, 0, 1});
@@ -697,10 +700,12 @@ int main(int argc, char** argv) {
       const double dec = s.dec * kPi / 180.0 + s.pm_dec * dt * mas;
       const double ra = s.ra * kPi / 180.0 + s.pm_ra * dt * mas / std::cos(dec);
       const vec3 d{std::cos(dec) * std::cos(ra), std::cos(dec) * std::sin(ra), std::sin(dec)};
-      // the brighter, the larger and the more solid the dot
-      const double step = std::clamp(reach[cam] - s.mag, 0.0, 8.0);
-      const double half = (2.1 + 0.56 * step) * pixel;
-      const int row = std::clamp(static_cast<int>(8.0 * (0.3 + 0.175 * step) + 0.5), 1, 8) - 1;
+      // A star is a point: every dot is one pixel of light, and a brighter star is a more solid
+      // pixel, never a larger dot. How solid: the star's light to the power 0.4, which keeps
+      // the faint ones in sight beside the bright, as an eye does.
+      const double half = 0.65 * pixel;
+      const double solid = std::min(1.0, std::pow(10.0, -0.4 * 0.4 * (s.mag - full[cam])));
+      const int row = std::clamp(kStarRows - 1 + static_cast<int>(std::lround(std::log(solid) / std::log(1.0 / 0.75))), 0, kStarRows - 1);
       const double edges[7] = {-0.12, 0.15, 0.45, 0.75, 1.05, 1.35, 1.7};
       int col = 0;
       while (col < 7 && s.bv > edges[col]) ++col;
@@ -710,11 +715,49 @@ int main(int argc, char** argv) {
       const auto base = static_cast<std::uint32_t>(p.pos.size() / 3);
       for (int k = 0; k < 4; ++k) {  // up and left, up and right, down and left, down and right, seen from inside
         const double a = k % 2 ? -half : half, b = k < 2 ? half : -half;
-        put(p, d + a * e1 + b * e2, -1.0 * d, (col + (k % 2 ? 1.0 : 0.0)) / 8.0, (row + (k < 2 ? 0.0 : 1.0)) / 8.0);
+        put(p, d + a * e1 + b * e2, -1.0 * d, (col + (k % 2 ? 1.0 : 0.0)) / 8.0, (row + (k < 2 ? 0.0 : 1.0)) / kStarRows);
       }
       for (std::uint32_t k : {0u, 1u, 2u, 1u, 3u, 2u}) p.idx.push_back(base + k);
     }
     write_glb(out + "/stars-" + std::to_string(cam + 1) + ".glb", {p});
+  }
+  // out/star-names.txt: the well-known bright stars, for the game to name: each looked up in the
+  // catalogue near where it is known to be (right ascension in hours, declination in degrees),
+  // so that the name sits on the catalogue's own star.
+  {
+    struct named { const char* name; double ra_h, dec; };
+    const named known[] = {
+        {"Sirius", 6.752, -16.72}, {"Canopus", 6.399, -52.70}, {"Alpha Centauri", 14.660, -60.83}, {"Arcturus", 14.261, 19.18}, {"Vega", 18.616, 38.78},
+        {"Capella", 5.278, 46.00}, {"Rigel", 5.242, -8.20}, {"Procyon", 7.655, 5.22}, {"Achernar", 1.629, -57.24}, {"Betelgeuse", 5.919, 7.41},
+        {"Hadar", 14.064, -60.37}, {"Altair", 19.846, 8.87}, {"Acrux", 12.443, -63.10}, {"Aldebaran", 4.599, 16.51}, {"Antares", 16.490, -26.43},
+        {"Spica", 13.420, -11.16}, {"Pollux", 7.755, 28.03}, {"Fomalhaut", 22.961, -29.62}, {"Deneb", 20.690, 45.28}, {"Mimosa", 12.795, -59.69},
+        {"Regulus", 10.140, 11.97}, {"Adhara", 6.977, -28.97}, {"Castor", 7.577, 31.89}, {"Shaula", 17.560, -37.10}, {"Gacrux", 12.519, -57.11},
+        {"Bellatrix", 5.419, 6.35}, {"Elnath", 5.438, 28.61}, {"Miaplacidus", 9.220, -69.72}, {"Alnilam", 5.604, -1.20}, {"Alnair", 22.137, -46.96},
+        {"Alioth", 12.900, 55.96}, {"Dubhe", 11.062, 61.75}, {"Mirfak", 3.405, 49.86}, {"Alkaid", 13.792, 49.31}, {"Polaris", 2.530, 89.26},
+        {"Alphard", 9.460, -8.66}, {"Hamal", 2.120, 23.46}, {"Denebola", 11.818, 14.57}, {"Alpheratz", 0.140, 29.09}, {"Mizar", 13.399, 54.93},
+        {"Kaus Australis", 18.403, -34.38}, {"Sargas", 17.622, -43.00}, {"Avior", 8.375, -59.51}, {"Atria", 16.811, -69.03}, {"Alhena", 6.629, 16.40},
+        {"Peacock", 20.427, -56.74}, {"Wezen", 7.140, -26.39}, {"Nunki", 18.921, -26.30}, {"Rasalhague", 17.582, 12.56}, {"Diphda", 0.727, -17.99},
+        {"Mirach", 1.162, 35.62}, {"Algol", 3.136, 40.96}, {"Saiph", 5.796, -9.67}, {"Mintaka", 5.533, -0.30}, {"Alnitak", 5.679, -1.94}, {"Kochab", 14.845, 74.16}};
+    std::ofstream f(out + "/star-names.txt");
+    for (const named& k : known) {
+      const double a = k.ra_h * 15.0 * kPi / 180.0, b = k.dec * kPi / 180.0;
+      const vec3 want{std::cos(b) * std::cos(a), std::cos(b) * std::sin(a), std::sin(b)};
+      const star* found = nullptr;
+      for (const star& s : stars) {  // the brightest within 0.4 degrees
+        const double ra = s.ra * kPi / 180.0, dec = s.dec * kPi / 180.0;
+        const vec3 d{std::cos(dec) * std::cos(ra), std::cos(dec) * std::sin(ra), std::sin(dec)};
+        if (dot(d, want) > std::cos(0.4 * kPi / 180.0) && (!found || s.mag < found->mag)) found = &s;
+      }
+      if (!found || found->mag > 3.2) {
+        std::fprintf(stderr, "star names: no bright star in the catalogue where %s should be\n", k.name);
+        continue;
+      }
+      std::string name = k.name;
+      for (char& ch : name) if (ch == ' ') ch = '_';
+      const double dt = 1984.0 - 1991.25, mas = kPi / 180.0 / 3.6e6;
+      const double dec = found->dec + found->pm_dec * dt * mas * 180.0 / kPi;
+      f << name << ' ' << found->ra + found->pm_ra * dt * mas * 180.0 / kPi / std::cos(dec * kPi / 180.0) << ' ' << dec << ' ' << found->mag << '\n';
+    }
   }
   // out/ring.glb: Saturn's rings, flat in the planet's equator, in units of the
   // planet's radius, from the inner edge of the D ring to the F ring. The texture

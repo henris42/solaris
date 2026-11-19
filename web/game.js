@@ -88,7 +88,7 @@ var ENVIRONMENT_IS_PTHREAD = ENVIRONMENT_IS_WORKER && self.name?.startsWith("em-
 
 // --pre-jses are emitted after the Module integration code, so that they can
 // refer to Module (if they choose; they can also define Module)
-// include: /tmp/tmpf9y9vped.js
+// include: /tmp/tmp1adcxmg4.js
 if (!Module["expectedDataFileDownloads"]) {
   Module["expectedDataFileDownloads"] = 0;
 }
@@ -427,126 +427,130 @@ Module["expectedDataFileDownloads"]++;
     }, {
       "filename": "/out/star-dots.png",
       "start": 4070679,
-      "end": 4087195
+      "end": 4103643
+    }, {
+      "filename": "/out/star-names.txt",
+      "start": 4103643,
+      "end": 4105275
     }, {
       "filename": "/out/uranus.scene",
-      "start": 4087195,
-      "end": 4386467
+      "start": 4105275,
+      "end": 4404547
     }, {
       "filename": "/textures/ariel.jpg",
-      "start": 4386467,
-      "end": 4459168
+      "start": 4404547,
+      "end": 4477248
     }, {
       "filename": "/textures/callisto.jpg",
-      "start": 4459168,
-      "end": 4886162
+      "start": 4477248,
+      "end": 4904242
     }, {
       "filename": "/textures/dione.jpg",
-      "start": 4886162,
-      "end": 5593870
+      "start": 4904242,
+      "end": 5611950
     }, {
       "filename": "/textures/enceladus.jpg",
-      "start": 5593870,
-      "end": 6482938
+      "start": 5611950,
+      "end": 6501018
     }, {
       "filename": "/textures/europa.jpg",
-      "start": 6482938,
-      "end": 7011452
+      "start": 6501018,
+      "end": 7029532
     }, {
       "filename": "/textures/ganymede.jpg",
-      "start": 7011452,
-      "end": 7470272
+      "start": 7029532,
+      "end": 7488352
     }, {
       "filename": "/textures/iapetus.jpg",
-      "start": 7470272,
-      "end": 7976447
+      "start": 7488352,
+      "end": 7994527
     }, {
       "filename": "/textures/io.jpg",
-      "start": 7976447,
-      "end": 9506239
+      "start": 7994527,
+      "end": 9524319
     }, {
       "filename": "/textures/jupiter.jpg",
-      "start": 9506239,
-      "end": 9898626
+      "start": 9524319,
+      "end": 9916706
     }, {
       "filename": "/textures/mimas.jpg",
-      "start": 9898626,
-      "end": 10446069
+      "start": 9916706,
+      "end": 10464149
     }, {
       "filename": "/textures/miranda.jpg",
-      "start": 10446069,
-      "end": 10562511
+      "start": 10464149,
+      "end": 10580591
     }, {
       "filename": "/textures/neptune.jpg",
-      "start": 10562511,
-      "end": 10655204
+      "start": 10580591,
+      "end": 10673284
     }, {
       "filename": "/textures/oberon.jpg",
-      "start": 10655204,
-      "end": 10781673
+      "start": 10673284,
+      "end": 10799753
     }, {
       "filename": "/textures/rhea.jpg",
-      "start": 10781673,
-      "end": 11662707
+      "start": 10799753,
+      "end": 11680787
     }, {
       "filename": "/textures/ring.png",
-      "start": 11662707,
-      "end": 11675150
+      "start": 11680787,
+      "end": 11693230
     }, {
       "filename": "/textures/saturn.jpg",
-      "start": 11675150,
-      "end": 11837578
+      "start": 11693230,
+      "end": 11855658
     }, {
       "filename": "/textures/shade.png",
-      "start": 11837578,
-      "end": 11837948
+      "start": 11855658,
+      "end": 11856028
     }, {
       "filename": "/textures/tethys.jpg",
-      "start": 11837948,
-      "end": 12659348
+      "start": 11856028,
+      "end": 12677428
     }, {
       "filename": "/textures/titan.jpg",
-      "start": 12659348,
-      "end": 12672651
+      "start": 12677428,
+      "end": 12690731
     }, {
       "filename": "/textures/titania.jpg",
-      "start": 12672651,
-      "end": 12792540
+      "start": 12690731,
+      "end": 12810620
     }, {
       "filename": "/textures/triton.jpg",
-      "start": 12792540,
-      "end": 13153673
+      "start": 12810620,
+      "end": 13171753
     }, {
       "filename": "/textures/umbriel.jpg",
-      "start": 13153673,
-      "end": 13215927
+      "start": 13171753,
+      "end": 13234007
     }, {
       "filename": "/textures/uranus.jpg",
-      "start": 13215927,
-      "end": 13259544
+      "start": 13234007,
+      "end": 13277624
     } ],
-    "remote_package_size": 13259544,
-    "package_uuid": "sha256-b5556b9903831b165b0c89c35e6b1a18c6686073444ed24b70914c8a58bae8bb"
+    "remote_package_size": 13277624,
+    "package_uuid": "sha256-b7ed89c4bea30da4f52041af6a2e0f93131610614b0f41ce090154b5ce93b286"
   });
 })();
 
-// end include: /tmp/tmpf9y9vped.js
-// include: /tmp/tmpfde_yop3.js
+// end include: /tmp/tmp1adcxmg4.js
+// include: /tmp/tmpztl4wyjp.js
 // All the pre-js content up to here must remain later on, we need to run
 // it.
 if (Module["$ww"] || (typeof ENVIRONMENT_IS_PTHREAD != "undefined" && ENVIRONMENT_IS_PTHREAD)) Module["preRun"] = [];
 
 var necessaryPreJSTasks = Module["preRun"].slice();
 
-// end include: /tmp/tmpfde_yop3.js
-// include: /tmp/tmpe5zcfcyo.js
+// end include: /tmp/tmpztl4wyjp.js
+// include: /tmp/tmpk8rniso9.js
 if (!Module["preRun"]) throw "Module.preRun should exist because file support used it; did a pre-js delete it?";
 
 necessaryPreJSTasks.forEach(task => {
   if (Module["preRun"].indexOf(task) < 0) throw "All preRun tasks that exist before user pre-js code should remain after; did you replace Module or modify Module.preRun?";
 });
 
-// end include: /tmp/tmpe5zcfcyo.js
+// end include: /tmp/tmpk8rniso9.js
 // Sometimes an existing Module object exists with properties
 // meant to overwrite the default module functionality. Here
 // we collect those properties and reapply _after_ we configure
@@ -1478,7 +1482,7 @@ function dbg(...args) {
 // end include: runtime_debug.js
 // === Body ===
 var ASM_CONSTS = {
-  42325756: $0 => {
+  42325804: $0 => {
     var str = UTF8ToString($0) + "\n\n" + "Abort/Retry/Ignore/AlwaysIgnore? [ariA] :";
     var reply = window.prompt(str, "i");
     if (reply === null) {
@@ -1486,7 +1490,7 @@ var ASM_CONSTS = {
     }
     return allocate(intArrayFromString(reply), "i8", ALLOC_NORMAL);
   },
-  42325981: () => {
+  42326029: () => {
     if (typeof (AudioContext) !== "undefined") {
       return true;
     } else if (typeof (webkitAudioContext) !== "undefined") {
@@ -1494,7 +1498,7 @@ var ASM_CONSTS = {
     }
     return false;
   },
-  42326128: () => {
+  42326176: () => {
     if ((typeof (navigator.mediaDevices) !== "undefined") && (typeof (navigator.mediaDevices.getUserMedia) !== "undefined")) {
       return true;
     } else if (typeof (navigator.webkitGetUserMedia) !== "undefined") {
@@ -1502,7 +1506,7 @@ var ASM_CONSTS = {
     }
     return false;
   },
-  42326362: $0 => {
+  42326410: $0 => {
     if (typeof (Module["SDL2"]) === "undefined") {
       Module["SDL2"] = {};
     }
@@ -1526,11 +1530,11 @@ var ASM_CONSTS = {
     }
     return SDL2.audioContext === undefined ? -1 : 0;
   },
-  42326914: () => {
+  42326962: () => {
     var SDL2 = Module["SDL2"];
     return SDL2.audioContext.sampleRate;
   },
-  42326982: ($0, $1, $2, $3) => {
+  42327030: ($0, $1, $2, $3) => {
     var SDL2 = Module["SDL2"];
     var have_microphone = function(stream) {
       if (SDL2.capture.silenceTimer !== undefined) {
@@ -1572,7 +1576,7 @@ var ASM_CONSTS = {
       }, have_microphone, no_microphone);
     }
   },
-  42328675: ($0, $1, $2, $3) => {
+  42328723: ($0, $1, $2, $3) => {
     var SDL2 = Module["SDL2"];
     SDL2.audio.scriptProcessorNode = SDL2.audioContext["createScriptProcessor"]($1, 0, $0);
     SDL2.audio.scriptProcessorNode["onaudioprocess"] = function(e) {
@@ -1604,7 +1608,7 @@ var ASM_CONSTS = {
       SDL2.audio.silenceTimer = setInterval(silence_callback, ($1 / SDL2.audioContext.sampleRate) * 1e3);
     }
   },
-  42329850: ($0, $1) => {
+  42329898: ($0, $1) => {
     var SDL2 = Module["SDL2"];
     var numChannels = SDL2.capture.currentCaptureBuffer.numberOfChannels;
     for (var c = 0; c < numChannels; ++c) {
@@ -1623,7 +1627,7 @@ var ASM_CONSTS = {
       }
     }
   },
-  42330455: ($0, $1) => {
+  42330503: ($0, $1) => {
     var SDL2 = Module["SDL2"];
     var numChannels = SDL2.audio.currentOutputBuffer["numberOfChannels"];
     for (var c = 0; c < numChannels; ++c) {
@@ -1636,7 +1640,7 @@ var ASM_CONSTS = {
       }
     }
   },
-  42330935: $0 => {
+  42330983: $0 => {
     var SDL2 = Module["SDL2"];
     if ($0) {
       if (SDL2.capture.silenceTimer !== undefined) {
@@ -1670,7 +1674,7 @@ var ASM_CONSTS = {
       SDL2.audioContext = undefined;
     }
   },
-  42331941: ($0, $1, $2) => {
+  42331989: ($0, $1, $2) => {
     var w = $0;
     var h = $1;
     var pixels = $2;
@@ -1741,7 +1745,7 @@ var ASM_CONSTS = {
     }
     SDL2.ctx.putImageData(SDL2.image, 0, 0);
   },
-  42333410: ($0, $1, $2, $3, $4) => {
+  42333458: ($0, $1, $2, $3, $4) => {
     var w = $0;
     var h = $1;
     var hot_x = $2;
@@ -1778,20 +1782,20 @@ var ASM_CONSTS = {
     stringToUTF8(url, urlBuf, url.length + 1);
     return urlBuf;
   },
-  42334399: $0 => {
+  42334447: $0 => {
     if (Module["canvas"]) {
       Module["canvas"].style["cursor"] = UTF8ToString($0);
     }
   },
-  42334482: () => {
+  42334530: () => {
     if (Module["canvas"]) {
       Module["canvas"].style["cursor"] = "none";
     }
   },
-  42334551: () => window.innerWidth,
-  42334581: () => window.innerHeight,
-  42334612: () => screen.availWidth,
-  42334638: () => {
+  42334599: () => window.innerWidth,
+  42334629: () => window.innerHeight,
+  42334660: () => screen.availWidth,
+  42334686: () => {
     var href = window.location.href;
     var dir = href.substring(0, href.lastIndexOf("/") + 1);
     var lengthBytes = lengthBytesUTF8(dir) + 1;
@@ -1799,7 +1803,7 @@ var ASM_CONSTS = {
     stringToUTF8(dir, stringOnWasmHeap, lengthBytes);
     return stringOnWasmHeap;
   },
-  42334895: $0 => {
+  42334943: $0 => {
     window.location.href = UTF8ToString($0);
   }
 };
