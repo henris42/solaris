@@ -38,7 +38,7 @@
 // GameApi scales every model it loads to 400 units across, centred. Each model here
 // is made to be measured exactly (the first triangle of every file spans its box),
 // so that a ball comes out with radius 200 and is then sized and placed by a matrix
-// of its own, set anew for every frame. GameApi's camera is a long lens: 17 degrees
+// of its own, set anew for every frame. The picture by eye is 17 degrees
 // from top to bottom.
 //
 // Build and run: ./play.sh [jupiter|saturn|uranus|neptune]                 the tour
@@ -125,6 +125,10 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kReach = 1400.0;     // where the farthest bodies are drawn, units
 constexpr double kNear = 1.0e5;       // km: bodies nearer than this are drawn nearer in proportion
 constexpr float kSky = 1500.0f;       // radius of the sky
+// One pixel of the picture by eye is 3.76e-4 radians (17 degrees from top to bottom of 800 pixels):
+// the star dots, the cameras' fields and the spacecraft's place are all made for that. GameApi
+// itself draws with 90 degrees from top to bottom (execute_ml), so the lens starts from this much.
+constexpr double kEye = (1.0 / 3.76e-4) / (800.0 / 2.0);
 constexpr float kBall = 200.0f;       // radius GameApi gives the ball files: it makes every model 400 units across
 
 struct body {
@@ -1072,7 +1076,7 @@ int main(int argc, char** argv) {
     const GameApi::M look = ev.matrix_api.mult(ev.matrix_api.yrot(static_cast<float>(aim_yaw + (1.0 - beside) * off_yaw)),
                                                ev.matrix_api.xrot(static_cast<float>(aim_pitch + (1.0 - beside) * (eye_pitch - aim_pitch))));
     ev.mainloop_api.clear_3d(0xff000000);
-    const auto power = static_cast<float>(lens_now);
+    const auto power = static_cast<float>(lens_now * kEye);
     const GameApi::M lens = ev.matrix_api.scale(power, power, 1.0f);
     const int cam = lens_now < 2.3 ? 0 : lens_now < 14.7 ? 1 : 2;  // the star field made for the nearest lens
     ev.move_api.set_matrix(stars_mn[cam], ev.matrix_api.mult(ev.matrix_api.scale(kSky / kBall, kSky / kBall, kSky / kBall), c.sky));
@@ -1083,7 +1087,8 @@ int main(int argc, char** argv) {
     ev.mainloop_api.execute_ml(ev, c.ml, sh, sh2, sh2, sh3, look, lens, look, w, h);
     glClear(GL_DEPTH_BUFFER_BIT);
     if (craft)  // in the middle by eye; to the right of the camera's picture
-      ev.mainloop_api.execute_ml(ev, probe, sh, sh2, sh2, sh3, around, ev.matrix_api.trans(static_cast<float>(beside) * 0.15f * eye, 0.0f, -eye), around, w, h);
+      ev.mainloop_api.execute_ml(ev, probe, sh, sh2, sh2, sh3, around,
+                                 ev.matrix_api.mult(ev.matrix_api.trans(static_cast<float>(beside) * 0.15f * eye, 0.0f, -eye), ev.matrix_api.scale(static_cast<float>(kEye), static_cast<float>(kEye), 1.0f)), around, w, h);
     std::size_t marked = focus;  // in the list: the body in view; following Voyager, the body it photographs, if it is one of the list
     if (shot) {
       marked = none;
