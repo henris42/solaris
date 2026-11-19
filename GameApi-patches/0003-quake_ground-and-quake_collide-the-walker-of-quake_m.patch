@@ -1,0 +1,397 @@
+From 8a885f995255890c9d37753ec9d341f119b1d610 Mon Sep 17 00:00:00 2001
+From: Henri Sundelin <henris42@users.noreply.github.com>
+Date: Thu, 19 Nov 2026 04:02:36 +0200
+Subject: [PATCH] quake_ground and quake_collide: the walker of quake_ml2
+ follows the ground and is kept out of things
+
+Two new boxes for scenes whose ground and obstacles are meshes (a P, as from
+gltf_mesh_all_p). Both go under quake_ml2, around the part of the scene their
+faces belong to, and use in_MV and in_T there to find where the walker stands
+among the faces.
+
+quake_ground(ev, ml, ground, climb_speed) puts the faces' heights on a net and
+moves quake_pos_height so that the ground under the walker stays as far below
+the eye as it was at the start.
+
+quake_collide(ev, ml, obstacles, radius, height) marks the space the faces take
+up in a block of cells and, when the walker's body reaches a marked cell, asks
+QuakeML2 through quake_push_x, quake_push_z to move the walker away; walking on
+at a slant slides along the thing.
+
+QuakeML2 gains quake_pos_height (a shift of the view in y) and takes the push.
+Without the new boxes both stay zero and it does what it did.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ GameApi/GameApi.cc              | 296 ++++++++++++++++++++++++++++++++
+ GameApi/GameApi.hh              |   2 +
+ GameApi/GameApi_cmd_mainloop.cc |  12 ++
+ 3 files changed, 310 insertions(+)
+
+diff --git a/GameApi/GameApi.cc b/GameApi/GameApi.cc
+index 2e878b6..5b3019f 100644
+--- a/GameApi/GameApi.cc
++++ b/GameApi/GameApi.cc
+@@ -25355,6 +25355,10 @@ ML I34=ev.move_api.comb_key_activate_ml(ev,I31,I33,k_119,k_97,s_1);
+ }
+ 
+ float quake_pos_x, quake_pos_y;
++// how far the walker's view is moved up or down; set by QuakeGround, used by QuakeML2
++float quake_pos_height = 0.0f;
++// how far the walker is to be moved aside, in the view's x and z; set by QuakeCollide, taken (and cleared) by QuakeML2
++float quake_push_x = 0.0f, quake_push_z = 0.0f;
+ float quake_rot_y;
+ 
+ bool g_is_quake = false;
+@@ -25537,6 +25541,12 @@ public:
+     //} else {
+           GameApi::InteractionApi::quake_movement_frame(ev, pos_x, pos_y, rot_y, dt, speed_x, speed_y, speed, rot_speed);
+ 	  //}
++    if (quake_push_x!=0.0f || quake_push_z!=0.0f) {
++      // moving the walker by d in the view is moving the scene by -d there: undo the turn and the mirror to get it in pos_x, pos_y
++      Point d = Point(-quake_push_x,0.0f,-quake_push_z) * Matrix::Inverse(Matrix::YRotation(rot_y)*Matrix::Scale(1.0,1.0,-1.0));
++      pos_x += d.x; pos_y += d.z;
++      quake_push_x = 0.0f; quake_push_z = 0.0f;
++    }
+     quake_pos_x = pos_x;
+     quake_pos_y = -pos_y;
+     quake_rot_y = rot_y;
+@@ -25565,6 +25575,8 @@ public:
+ #else
+     GameApi::M res = ev.matrix_api.mult(env_m, ev.matrix_api.mult(ev.matrix_api.mult(ev.matrix_api.mult(trans,rot_y2),trans2),scale));
+ #endif
++    res = ev.matrix_api.mult(res,ev.matrix_api.trans(0.0f,quake_pos_height,0.0f));
++
+     //GameApi::M mat2i = ev.matrix_api.transpose(ev.matrix_api.inverse(res));
+     GameApi::SH s1;
+     s1.id = e.sh_texture;
+@@ -25666,6 +25678,290 @@ GameApi::ML GameApi::MovementNode::quake_ml2(EveryApi &ev, ML ml,float speed, fl
+   return add_main_loop(e, new QuakeML2(e,ev, mml, speed, rot_speed));
+ }
+ 
++// Lets the walker of quake_ml2 follow the ground. Placed anywhere under quake_ml2, around the
++// part of the scene the faces belong to (so that in_MV here is the faces' own matrix), it finds
++// the ground's height under the eye and moves quake_pos_height so that the ground there
++// stays as far below the eye as it was at the start.
++class QuakeGround : public MainLoopItem
++{
++public:
++  QuakeGround(GameApi::EveryApi &ev, MainLoopItem *next, FaceCollection *ground, float climb_speed) : ev(ev), next(next), ground(ground), climb_speed(climb_speed) { }
++  ~QuakeGround() { quake_pos_height = 0.0f; }
++  void Collect(CollectVisitor &vis)
++  {
++    next->Collect(vis);
++    ground->Collect(vis);
++    vis.register_obj(this);
++  }
++  void HeavyPrepare() { }
++  void Prepare() { next->Prepare(); ground->Prepare(); }
++
++  // The faces' heights on a net over their extent in x and z: the highest face over each cell.
++  bool make_heights()
++  {
++    int faces = ground->NumFaces();
++    if (faces<=0) return false;
++    min_x = min_z = 1e30f; max_x = max_z = -1e30f;
++    for(int f=0;f<faces;f++) {
++      int n = ground->NumPoints(f);
++      // a face without extent in x and z (such as one put in only to span a box) has no height to give
++      float fx0=1e30f, fx1=-1e30f, fz0=1e30f, fz1=-1e30f;
++      for(int i=0;i<n;i++) { Point p = ground->FacePoint(f,i); fx0=std::min(fx0,p.x); fx1=std::max(fx1,p.x); fz0=std::min(fz0,p.z); fz1=std::max(fz1,p.z); }
++      if (n<3 || fx1-fx0<1e-6f || fz1-fz0<1e-6f || flat_area(f)<1e-9f) continue;
++      min_x=std::min(min_x,fx0); max_x=std::max(max_x,fx1); min_z=std::min(min_z,fz0); max_z=std::max(max_z,fz1);
++    }
++    if (max_x<=min_x || max_z<=min_z) return false;
++    heights.assign(cells*cells, -1e30f);
++    for(int f=0;f<faces;f++) {
++      int n = ground->NumPoints(f);
++      if (n<3 || flat_area(f)<1e-9f) continue;
++      Point a = ground->FacePoint(f,0);
++      for(int i=1;i+1<n;i++) triangle(a, ground->FacePoint(f,i), ground->FacePoint(f,i+1));
++    }
++    // cells no face reached take their neighbours' height
++    for(int pass=0;pass<cells;pass++) {
++      bool open = false;
++      std::vector<float> next_heights = heights;
++      for(int z=0;z<cells;z++)
++	for(int x=0;x<cells;x++) {
++	  if (heights[z*cells+x]>-1e29f) continue;
++	  float sum=0.0f; int count=0;
++	  for(int k=0;k<4;k++) {
++	    int xx = x+(k==0)-(k==1), zz = z+(k==2)-(k==3);
++	    if (xx<0||zz<0||xx>=cells||zz>=cells||heights[zz*cells+xx]<-1e29f) continue;
++	    sum+=heights[zz*cells+xx]; count++;
++	  }
++	  if (count) next_heights[z*cells+x]=sum/count; else open=true;
++	}
++      heights = next_heights;
++      if (!open) break;
++    }
++    return true;
++  }
++  float flat_area(int f) const
++  {
++    Point a = ground->FacePoint(f,0), b = ground->FacePoint(f,1), c = ground->FacePoint(f,2);
++    return fabs((b.z-c.z)*(a.x-c.x)+(c.x-b.x)*(a.z-c.z));
++  }
++  float cell_x(float x) const { return (x-min_x)/(max_x-min_x)*cells-0.5f; }
++  float cell_z(float z) const { return (z-min_z)/(max_z-min_z)*cells-0.5f; }
++  void triangle(Point a, Point b, Point c)
++  {
++    float den = (b.z-c.z)*(a.x-c.x)+(c.x-b.x)*(a.z-c.z);
++    if (fabs(den)<1e-9f) return;
++    int x0 = std::max(0,int(floor(cell_x(std::min(a.x,std::min(b.x,c.x)))))), x1 = std::min(cells-1,int(ceil(cell_x(std::max(a.x,std::max(b.x,c.x))))));
++    int z0 = std::max(0,int(floor(cell_z(std::min(a.z,std::min(b.z,c.z)))))), z1 = std::min(cells-1,int(ceil(cell_z(std::max(a.z,std::max(b.z,c.z))))));
++    for(int z=z0;z<=z1;z++)
++      for(int x=x0;x<=x1;x++) {
++	float px = min_x+(x+0.5f)/cells*(max_x-min_x), pz = min_z+(z+0.5f)/cells*(max_z-min_z);
++	float u = ((b.z-c.z)*(px-c.x)+(c.x-b.x)*(pz-c.z))/den, v = ((c.z-a.z)*(px-c.x)+(a.x-c.x)*(pz-c.z))/den;
++	if (u<-0.02f||v<-0.02f||u+v>1.02f) continue;
++	heights[z*cells+x] = std::max(heights[z*cells+x], u*a.y+v*b.y+(1.0f-u-v)*c.y);
++      }
++  }
++  float height_at(float x, float z) const
++  {
++    float fx = std::min(std::max(cell_x(x),0.0f),cells-1.001f), fz = std::min(std::max(cell_z(z),0.0f),cells-1.001f);
++    int ix = int(fx), iz = int(fz);
++    float tx = fx-ix, tz = fz-iz;
++    return (heights[iz*cells+ix]*(1-tx)+heights[iz*cells+ix+1]*tx)*(1-tz) + (heights[(iz+1)*cells+ix]*(1-tx)+heights[(iz+1)*cells+ix+1]*tx)*tz;
++  }
++
++  virtual void execute(MainLoopEnv &e)
++  {
++    if (!ready) ready = make_heights();
++    if (ready) {
++      // The eye is the origin of what in_MV and then in_T give (the projection looks out from there).
++      Matrix m = e.in_MV * e.in_T;
++      Point under = Point(0.0f,0.0f,0.0f) * Matrix::Inverse(m);
++      float y = (Point(under.x, height_at(under.x,under.z), under.z) * m).y;  // where the ground under the walker is drawn now
++      if (!have_start) { start_y = y - quake_pos_height; have_start = true; }
++      float target = quake_pos_height + (start_y - y);
++      float step = fabs(climb_speed) * ev.mainloop_api.get_delta_time()*7.0f;  // the walker's own measure of speed
++      if (target > quake_pos_height) quake_pos_height = std::min(target, quake_pos_height+step);
++      else quake_pos_height = std::max(target, quake_pos_height-step);
++    }
++    next->execute(e);
++  }
++  virtual void handle_event(MainLoopEvent &e) { next->handle_event(e); }
++  virtual std::vector<int> shader_id() { return next->shader_id(); }
++private:
++  GameApi::EveryApi &ev;
++  MainLoopItem *next;
++  FaceCollection *ground;
++  float climb_speed;
++  static const int cells = 256;
++  std::vector<float> heights;
++  float min_x=0.0f, max_x=0.0f, min_z=0.0f, max_z=0.0f;
++  bool ready = false, have_start = false;
++  float start_y = 0.0f;
++};
++
++// Keeps the walker of quake_ml2 out of things. Placed under quake_ml2, around the part of the
++// scene the faces belong to, it marks the space the faces take up in a block of small cells and,
++// when the walker's body (a post from the eye down by `height`, `radius` thick, both in the
++// view's units) reaches a marked cell, asks QuakeML2 through quake_push_x, quake_push_z to move
++// the walker away from it. Walking on at a slant slides along the thing. A walker that gets well
++// inside the radius all the same, or steps through something thin, is put back where it last was not.
++class QuakeCollide : public MainLoopItem
++{
++public:
++  QuakeCollide(MainLoopItem *next, FaceCollection *faces, float radius, float height) : next(next), faces(faces), radius(radius), height(height) { }
++  void Collect(CollectVisitor &vis)
++  {
++    next->Collect(vis);
++    faces->Collect(vis);
++    vis.register_obj(this);
++  }
++  void HeavyPrepare() { }
++  void Prepare() { next->Prepare(); faces->Prepare(); }
++
++  static bool has_area(Point a, Point b, Point c) { return Vector::CrossProduct(b-a,c-a).Dist()>1e-9f; }
++  bool make_cells()
++  {
++    int count = faces->NumFaces();
++    if (count<=0) return false;
++    lo = Point(1e30f,1e30f,1e30f); hi = Point(-1e30f,-1e30f,-1e30f);
++    bool any = false;
++    for(int f=0;f<count;f++) {
++      int n = faces->NumPoints(f);
++      if (n<3 || !has_area(faces->FacePoint(f,0),faces->FacePoint(f,1),faces->FacePoint(f,2))) continue;  // such as a face put in only to span a box
++      for(int i=0;i<n;i++) {
++	Point p = faces->FacePoint(f,i);
++	lo.x=std::min(lo.x,p.x); lo.y=std::min(lo.y,p.y); lo.z=std::min(lo.z,p.z);
++	hi.x=std::max(hi.x,p.x); hi.y=std::max(hi.y,p.y); hi.z=std::max(hi.z,p.z);
++	any = true;
++      }
++    }
++    if (!any || hi.x<=lo.x || hi.y<=lo.y || hi.z<=lo.z) return false;
++    cells.assign((size_t(nx)*ny*nz+31)/32, 0u);
++    float cell = std::min((hi.x-lo.x)/nx, std::min((hi.y-lo.y)/ny, (hi.z-lo.z)/nz));
++    for(int f=0;f<count;f++) {
++      int n = faces->NumPoints(f);
++      if (n<3) continue;
++      Point a = faces->FacePoint(f,0);
++      for(int i=1;i+1<n;i++) {
++	Point b = faces->FacePoint(f,i), c = faces->FacePoint(f,i+1);
++	if (!has_area(a,b,c)) continue;
++	float longest = std::max((b-a).Dist(), std::max((c-a).Dist(), (c-b).Dist()));
++	int steps = std::min(400, std::max(1, int(ceil(longest/(cell*0.5f)))));
++	for(int u=0;u<=steps;u++)
++	  for(int v=0;u+v<=steps;v++) {
++	    float fu = float(u)/steps, fv = float(v)/steps;
++	    mark(Point(a.x+(b.x-a.x)*fu+(c.x-a.x)*fv, a.y+(b.y-a.y)*fu+(c.y-a.y)*fv, a.z+(b.z-a.z)*fu+(c.z-a.z)*fv));
++	  }
++      }
++    }
++    return true;
++  }
++  int cx(float x) const { return int(floor((x-lo.x)/(hi.x-lo.x)*nx)); }
++  int cy(float y) const { return int(floor((y-lo.y)/(hi.y-lo.y)*ny)); }
++  int cz(float z) const { return int(floor((z-lo.z)/(hi.z-lo.z)*nz)); }
++  void mark(Point p)
++  {
++    int x = std::min(nx-1,std::max(0,cx(p.x))), y = std::min(ny-1,std::max(0,cy(p.y))), z = std::min(nz-1,std::max(0,cz(p.z)));
++    size_t i = (size_t(y)*nz+z)*nx+x;
++    cells[i/32] |= 1u<<(i%32);
++  }
++  bool marked(int x, int y, int z) const
++  {
++    if (x<0||y<0||z<0||x>=nx||y>=ny||z>=nz) return false;
++    size_t i = (size_t(y)*nz+z)*nx+x;
++    return (cells[i/32]>>(i%32))&1u;
++  }
++
++  // Is anything marked within r of p, between the heights y0 and y1? If so, `away` points from it to p
++  // and `nearest` is how close the nearest marked cell is.
++  bool touches(Point p, float r, float y0, float y1, float &away_x, float &away_z, float &nearest) const
++  {
++    float sx = (hi.x-lo.x)/nx, sz = (hi.z-lo.z)/nz;
++    int c0 = cy(std::min(y0,y1)), c1 = cy(std::max(y0,y1));
++    away_x = 0.0f; away_z = 0.0f; nearest = 1e30f;
++    for(int z=cz(p.z-r);z<=cz(p.z+r);z++)
++      for(int x=cx(p.x-r);x<=cx(p.x+r);x++) {
++	float dx = p.x-(lo.x+(x+0.5f)*sx), dz = p.z-(lo.z+(z+0.5f)*sz);
++	float dist = sqrt(dx*dx+dz*dz);
++	if (dist>r) continue;
++	bool hit = false;
++	for(int y=c0;y<=c1&&!hit;y++) hit = marked(x,y,z);
++	if (!hit) continue;
++	if (dist>1e-6f) { away_x += dx/dist*(r-dist); away_z += dz/dist*(r-dist); }
++	nearest = std::min(nearest,dist);
++      }
++    return nearest<1e29f;
++  }
++  virtual void execute(MainLoopEnv &e)
++  {
++    if (!ready) ready = make_cells();
++    if (ready) {
++      // The eye is the origin of what in_MV and then in_T give (the projection looks out from there).
++      Matrix m = e.in_MV * e.in_T;
++      Matrix back = Matrix::Inverse(m);
++      Point eye = Point(0.0f,0.0f,0.0f) * back;
++      float scale = ((Point(1.0f,0.0f,0.0f) * back) - eye).Dist();  // the length here of one unit of the view
++      float r = fabs(radius)*scale;
++      float foot_y = (Point(0.0f,-fabs(height),0.0f) * back).y;
++      float cell = std::max((hi.x-lo.x)/nx, (hi.z-lo.z)/nz);
++      float ax, az, nearest, bx, bz, n2;
++      Point to = eye;
++      bool move = false;
++      // "Deep" is well inside the radius: there the walker is put back where it last was not deep.
++      // Between that and the radius the walker is pushed away, which is what slides it along things.
++      bool deep = touches(eye, r*0.6f, eye.y, foot_y, bx, bz, n2);
++      if (!deep && have_free) {
++	// a long step may have gone through something thin
++	float dx = eye.x-free_x, dz = eye.z-free_z, dist = sqrt(dx*dx+dz*dz);
++	int steps = std::min(64, int(dist/(0.5f*cell)));
++	for(int i=1;i<steps&&!deep;i++) deep = touches(Point(free_x+dx*i/steps, eye.y, free_z+dz*i/steps), 0.5f*cell, eye.y, foot_y, bx, bz, n2);
++      }
++      if (deep) {
++	if (have_free) { to = Point(free_x, eye.y, free_z); move = true; }
++      } else {
++	free_x = eye.x; free_z = eye.z; have_free = true;
++	if (touches(eye, r, eye.y, foot_y, ax, az, nearest)) {
++	  float len = sqrt(ax*ax+az*az);
++	  float push = std::min(r, r-nearest+0.05f*cell);
++	  if (len>1e-6f) {
++	    Point p = Point(eye.x+ax/len*push, eye.y, eye.z+az/len*push);
++	    if (!touches(p, r*0.6f, eye.y, foot_y, bx, bz, n2)) { to = p; move = true; }
++	  }
++	}
++      }
++      if (move) {
++	Point moved = to * m;  // where the walker should be, in the view
++	quake_push_x += moved.x; quake_push_z += moved.z;
++      }
++    }
++    next->execute(e);
++  }
++  virtual void handle_event(MainLoopEvent &e) { next->handle_event(e); }
++  virtual std::vector<int> shader_id() { return next->shader_id(); }
++private:
++  MainLoopItem *next;
++  FaceCollection *faces;
++  float radius, height;
++  static const int nx = 384, ny = 128, nz = 384;
++  std::vector<unsigned int> cells;
++  Point lo, hi;
++  bool ready = false;
++  bool have_free = false;   // the last place the walker was not deep in anything, in the faces' own x and z
++  float free_x = 0.0f, free_z = 0.0f;
++};
++
++GameApi::ML GameApi::MovementNode::quake_collide(EveryApi &ev, ML ml, P obstacles, float radius, float height)
++{
++  MainLoopItem *mml = find_main_loop(e,ml);
++  FaceCollection *faces = find_facecoll(e,obstacles);
++  return add_main_loop(e, new QuakeCollide(mml, faces, radius, height));
++}
++
++GameApi::ML GameApi::MovementNode::quake_ground(EveryApi &ev, ML ml, P ground, float climb_speed)
++{
++  MainLoopItem *mml = find_main_loop(e,ml);
++  FaceCollection *faces = find_facecoll(e,ground);
++  return add_main_loop(e, new QuakeGround(ev, mml, faces, climb_speed));
++}
++
+ extern GameApi::M g_view_rot;
+ 
+ bool g_is_quakeml3 = false;
+diff --git a/GameApi/GameApi.hh b/GameApi/GameApi.hh
+index 37dda4c..2c3d2bf 100644
+--- a/GameApi/GameApi.hh
++++ b/GameApi/GameApi.hh
+@@ -2204,6 +2204,8 @@ public:
+   IMPORT ML wasd(EveryApi &ev, ML ml, MN w, MN a, MN s, MN d, float duration);
+   IMPORT ML quake_ml(EveryApi &ev, ML ml, float speed, float rot_speed);
+   IMPORT ML quake_ml2(EveryApi &ev, ML ml, float speed, float rot_speed);
++  IMPORT ML quake_ground(EveryApi &ev, ML ml, P ground, float climb_speed);
++  IMPORT ML quake_collide(EveryApi &ev, ML ml, P obstacles, float radius, float height);
+   IMPORT ML quake_ml3(EveryApi &ev, ML ml, ML ml2, float speed, float rot_speed, float p_x, float p_y, float p_z);
+   IMPORT ML key_printer_ml(ML ml);
+   IMPORT ML local_move(EveryApi &ev, ML inner_ml, PTS center_points);
+diff --git a/GameApi/GameApi_cmd_mainloop.cc b/GameApi/GameApi_cmd_mainloop.cc
+index ad4bffa..7dad075 100644
+--- a/GameApi/GameApi_cmd_mainloop.cc
++++ b/GameApi/GameApi_cmd_mainloop.cc
+@@ -1186,6 +1186,18 @@ vec.push_back(ApiItemF(&GameApi::EveryApi::move_api, &GameApi::MovementNode::qua
+ 			 { "EveryApi&", "ML", "float", "float" },
+ 			 { "ev", "", "20.0", "0.03" },
+ 			 "ML", "move_api", "quake_ml2"));
++vec.push_back(ApiItemF(&GameApi::EveryApi::move_api, &GameApi::MovementNode::quake_ground,
++			 "quake_ground",
++			 { "ev", "ml", "ground", "climb_speed" },
++			 { "EveryApi&", "ML", "P", "float" },
++			 { "ev", "", "", "60.0" },
++			 "ML", "move_api", "quake_ground"));
++vec.push_back(ApiItemF(&GameApi::EveryApi::move_api, &GameApi::MovementNode::quake_collide,
++			 "quake_collide",
++			 { "ev", "ml", "obstacles", "radius", "height" },
++			 { "EveryApi&", "ML", "P", "float", "float" },
++			 { "ev", "", "", "60.0", "300.0" },
++			 "ML", "move_api", "quake_collide"));
+ #endif
+ #if (ALL==1)||(QUAKE_ML3==1)
+   vec.push_back(ApiItemF(&GameApi::EveryApi::move_api, &GameApi::MovementNode::quake_ml3,
+-- 
+2.53.0
+

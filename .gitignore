@@ -1,7 +1,2 @@
-out/
-em/
-web/game.js
-web/game.wasm
-web/game.data
-web/out/
-web/models/
+/out/
+/em/

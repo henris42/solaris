@@ -28,5 +28,11 @@ line=$(make -n -W test.cpp -f Makefile.LinuxEm pthreads_both_highmem | grep -m1 
 line=$(printf '%s' "$line" | sed "s#web_page/test.cpp#$V/game.cpp -I$V -I$V/orbit --preload-file $V/$S@/#; s#-std=c++11#-std=c++20#; s#-o web_page/engine_highmem.js#-o $V/web/game.js#")
 eval "$line"
 cd "$V"
+# The build leaves this folder's path in the files (as the name of the data package, and in the
+# source file names kept for error messages). Take it out: in the program it is overwritten
+# with as many other characters, so that nothing in the file moves.
+blank=$(printf '%s' "$V" | sed 's#[^/]#_#g')
+sed -i "s#$V/web/##g" web/game.js
+LC_ALL=C sed -i "s#$V#$blank#g" web/game.wasm
 du -sh web
 ls -l web/game.js web/game.wasm web/game.data

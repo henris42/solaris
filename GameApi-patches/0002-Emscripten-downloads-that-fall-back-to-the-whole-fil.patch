@@ -1,0 +1,212 @@
+From a733fa7198ec6526ee7b340c8c0bac040394d988 Mon Sep 17 00:00:00 2001
+From: Henri Sundelin <henris42@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 21:19:41 +0200
+Subject: [PATCH 2/2] Emscripten: downloads that fall back to the whole file,
+ leaks on failed blocks, and a build with clang 19
+
+Found by building the engine with Emscripten 3.1.69 and running it in
+Chromium against a test server that can fail block requests and can
+ignore Range. With a server that answers Range requests and does not
+fail, nothing here changes.
+
+- A server without Range support (or one that does not expose
+  Content-Range): the "bytes=0-0" probe gave a null header, which went
+  into std::string and aborted the program. The file is now fetched in
+  one piece (FetchInBlocks::no_range), as when concurrent download is
+  off. A probe that fails takes the same way instead of assuming a file
+  of 50000 bytes.
+- A block that failed 11 times fell back to the whole file, but the file
+  arrived without the extra last byte that block downloads carry and
+  that the readers leave out, so a .glb came out as "Invalid glTF
+  binary". fetch_2_success adds that byte whenever the readers will
+  leave one out. The url is no longer put on the error list before the
+  fallback has been tried; fetch_2_error does that when it fails too.
+- FetchInBlocks::fetch_failed: a failed block request is closed and its
+  user data freed before the retry (both were left behind on each
+  failure); after giving up, later failures of the same file do not call
+  failed() again; the count of concurrent downloads is given back.
+- fetch_success counted a request down twice when it came back empty.
+- fetch_block: the copy of the url made for emscripten_fetch is freed
+  (emscripten_fetch keeps its own).
+- set_string kept a copy of every string passed from JS that was used
+  only for its length; set_new_script kept every script it was ever
+  given. Both are freed now.
+- Equalizer.hh: two calls of the outer class's member functions from a
+  nested class without an object, which clang 19 rejects.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ GameApi/Equalizer.hh       |  4 ++--
+ GameApi/GameApi.cc         |  3 +++
+ GameApi/GameApi_dep_env.cc | 47 ++++++++++++++++++++++++++++++--------
+ 3 files changed, 43 insertions(+), 11 deletions(-)
+
+diff --git a/GameApi/Equalizer.hh b/GameApi/Equalizer.hh
+index 0cd0286..cebc903 100644
+--- a/GameApi/Equalizer.hh
++++ b/GameApi/Equalizer.hh
+@@ -3235,14 +3235,14 @@ public:
+       bool found = true;
+       // if this loop finds infinite amount of data/goes to infinite loop, you might have f=g.
+       while(found) {
+-	float pos = first_intersection_float(t,start_range, end_range,delta, found);
++	float pos = eq.first_intersection_float(t,start_range, end_range,delta, found);
+ 	if (found) roots.push_back(pos);
+ 	start_range = pos + 2.0*delta;
+       }
+     }
+     bool is_root(T t, float x) const {
+       int s = roots.size();
+-      for(int i=0;i<s;i++) if (eq.compare_y(eq.f(get_x(t,roots[i])),eq.g(x))) return true;
++      for(int i=0;i<s;i++) if (eq.compare_y(eq.f(eq.get_x(t,roots[i])),eq.g(x))) return true;
+       return false;
+     }
+     X equalizer_subset(T t, float x) const
+diff --git a/GameApi/GameApi.cc b/GameApi/GameApi.cc
+index 95fcfe5..2e878b6 100644
+--- a/GameApi/GameApi.cc
++++ b/GameApi/GameApi.cc
+@@ -40718,6 +40718,7 @@ KP extern "C" void set_new_script(const char *script2_)
+   // PROGRESS BAR end
+   
+   g_last_resize=Matrix::Identity();
++  delete [] (char*)g_mainloop_ptr; // the script before this one; it is only ever reached through this pointer
+   g_mainloop_ptr = (void*)script2;
+     g_mainloop_callback = &run_callback;
+     g_execute_callback = true;
+@@ -40828,6 +40829,7 @@ KP extern "C" void set_string(int num, const char *value_)
+   
+   size_t ptr_size=0;
+   char *ptr=0;
++  std::unique_ptr<char[]> ptr_owner;
+   if (num!=3) {
+ emscripten::val v = emscripten::val::u8string(value_);
+  std::string script2_a;  
+@@ -40837,6 +40839,7 @@ emscripten::val v = emscripten::val::u8string(value_);
+       std::copy(script2_a.begin(),script2_a.end(),ptr);
+       ptr[script2_a.size()]=0;
+       ptr_size=script2_a.size();
++      ptr_owner.reset(ptr); // only its size is used below
+   } else {
+     //script2_b = emscripten::vecFromJSArray<unsigned char>(v);
+     ptr = const_cast<char*>(value_);
+diff --git a/GameApi/GameApi_dep_env.cc b/GameApi/GameApi_dep_env.cc
+index 7349b99..80cbf4c 100644
+--- a/GameApi/GameApi_dep_env.cc
++++ b/GameApi/GameApi_dep_env.cc
+@@ -1731,6 +1731,7 @@ private:
+ 
+       
+       emscripten_fetch(&attr, ptr);
++      delete [] ptr; // emscripten_fetch keeps its own copy
+     } else { // split tool+brotli can be used to split the files beforehand, 1M blocks
+       int id1 = id / 26;
+       int id2 = id - (id1*26);
+@@ -1746,6 +1747,7 @@ private:
+       std::copy(url2.begin(),url2.end(),ptr);
+       ptr[url2.size()]=0;
+       emscripten_fetch(&attr, ptr);
++      delete [] ptr;
+     }
+     async_pending_count++;
+   }
+@@ -1753,9 +1755,9 @@ public:
+   void fetch_success(emscripten_fetch_t *fetch)
+   {
+     
+-    async_pending_count--;
+     // std::cout << "fetch_success: " << (int)fetch << " " << int(fetch->data) << " " << int(fetch->numBytes) << " " << fetch->status << std::endl;
+-    if (!fetch || !fetch->data || !fetch->numBytes) { fetch_failed(fetch); return; } 
++    if (!fetch || !fetch->data || !fetch->numBytes) { fetch_failed(fetch); return; } // counts the request down itself
++    async_pending_count--;
+     FetchInBlocksUserData *ptr = (FetchInBlocksUserData*)(fetch->userData);
+     //std::cout << fetch->statusText << std::endl;
+     //std::cout << fetch->status << std::endl;
+@@ -1889,20 +1891,41 @@ public:
+   {
+     async_pending_count--;
+     std::cout << "fetch_failed" << std::endl;
++    // this request is over whatever comes next: its user data and the fetch itself are freed here
++    FetchInBlocksUserData *ptr = fetch ? (FetchInBlocksUserData*)(fetch->userData) : 0;
++    int blk = ptr ? ptr->block_num : -1;
++    delete ptr;
++    if (fetch) emscripten_fetch_close(fetch);
++    if (gave_up) return; // the whole file is already being fetched the other way
+     failcount++;
+-    if (failcount>10) {
++    if (failcount>10 || blk<0) {
+       std::cout << "FetchInBlocks::chunk_failed()" << std::endl;
+-      g_error_urls.push_back(url);
++      gave_up = true;
++      g_num_pending_concurrent_downloads--;
++      if (g_num_pending_concurrent_downloads<0) g_num_pending_concurrent_downloads=0;
++      // The url is not an error yet: failed() fetches the file in one piece.
++      // fetch_2_error marks it when that fails too.
+       failed(data);
+-      emscripten_fetch_close(fetch);
+     }
+     else
+       {
+-	FetchInBlocksUserData *ptr = (FetchInBlocksUserData*)(fetch->userData);
+-	int blk = ptr->block_num;
+ 	fetch_block(blk);
+       }
+   }
++  // The server gave no Content-Range for the "bytes=0-0" probe (no range support, or the
++  // header is not exposed), or the probe failed: fetch the file in one piece.
++  void no_range()
++  {
++    async_pending_count--;
++    std::cout << "Warning: You probably don't have http Range requests enabled!" << std::endl;
++    std::cout << "Recommended solution (in .htaccess):" << std::endl;
++    std::cout << "<IfModule mod_headers.c>" << std::endl;
++    std::cout << "   Header set Access-Control-Expose-Headers \"Content-Length, Content-Range\""<< std::endl;
++    std::cout << "</IfModule>" << std::endl;
++    gave_up = true;
++    failed_after_size(0,-1);
++  }
++  bool gave_up = false;
+ public:
+   std::string url;
+   std::string url2;
+@@ -1924,6 +1947,7 @@ EMSCRIPTEN_KEEPALIVE
+ extern "C" void head_result(const char *ptr, void *data)
+ {
+   FetchInBlocks *blk = (FetchInBlocks *)data;
++  if (!ptr || !*ptr) { blk->no_range(); return; } // JS passes null when there is no Content-Range
+   std::string s(ptr);
+   blk->head_result(s);
+ }
+@@ -1931,7 +1955,7 @@ EMSCRIPTEN_KEEPALIVE
+ extern "C" void head_result_err(void *data)
+ {
+   FetchInBlocks *blk = (FetchInBlocks *)data;
+-  blk->head_result_err();
++  blk->no_range();
+ }
+ 
+ void blocks_success(emscripten_fetch_t *fetch)
+@@ -3229,7 +3253,10 @@ void fetch_2_success(emscripten_fetch_t *fetch)
+   dt->obj->result = std::vector<unsigned char,GameApiAllocator<unsigned char> >(&fetch->data[0],&fetch->data[fetch->numBytes]);
+   // hack to fix the download amounts.
+   //std::cout << "FETCH2SUCCESS:" << dt->final_file_size << "==" << fetch->numBytes << std::endl;
+-  if (dt->final_file_size!=-1 && fetch->numBytes != dt->final_file_size) {
++  // Data fetched in blocks carries one byte more than the file, and with concurrent download
++  // on, the readers (LoadGltf and others) leave the last byte out. A file that came this
++  // way instead, after its blocks failed or from a server without ranges, needs that byte too.
++  if ((g_concurrent_download || !g_no_concurrent_download) || (dt->final_file_size!=-1 && fetch->numBytes != dt->final_file_size)) {
+     //std::cout << "Size Compare:" << dt->final_file_size << "==" << fetch->numBytes << std::endl;
+      dt->obj->result.push_back(' ');
+   }
+@@ -3279,6 +3306,8 @@ void fetch_2_error(emscripten_fetch_t *fetch)
+ {
+   g_async_pending_count_failures++; std::cout << "FAIL: async_pending_count_failure" << std::endl;
+   std::cout << "ERROR: 2nd attempt at loading the data failed" << std::endl;
++  LoadData *dt = (LoadData*)(fetch->userData);
++  if (dt) g_error_urls.push_back(dt->url); // get_loaded_data stops waiting for it
+   emscripten_fetch_close(fetch);
+ }
+ void fetch_2_progress(emscripten_fetch_t *fetch)
+-- 
+2.53.0
+

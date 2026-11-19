@@ -225,7 +225,9 @@ python3 tools/serve.py web 8791        # then open http://127.0.0.1:8791/?planet
 
 With an emsdk of your own, leave out the cache lines and give its folder as `EMSCRIPTEN_PATH`. The engine's objects for the browser go into `GameApi/GameApi/objs` beside the desktop ones (`.bc` beside `.o`). `web.sh` takes GameApi's own link line for its browser program and puts `game.cpp` in the place of that program. The scenes, the surface maps and Voyager's picture record are packed into the page (`game.data`, 13 MB); the models are copied to `web/out` and `web/models/probe` and fetched while it runs.
 
-To publish it, copy the `web` folder to a web server: after `./web.sh` it holds everything the page needs, 103 MB, and the page finds its files beside itself wherever the folder is put. Two things the page asks of a server. It runs on several threads, which a browser allows only to a page that comes with two headers (`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`); where the server does not send them, `web/sw.js` adds them in the browser, at the cost of loading the page twice the first time, and that needs https (or localhost). And GameApi fetches a model in blocks with Range requests, which most servers answer. `tools/serve.py` does both. The built files in `web` are not in the repository.
+To publish it, copy the `web` folder to a web server: after `./web.sh` it holds everything the page needs, 103 MB, and the page finds its files beside itself wherever the folder is put. Two things the page asks of a server. It runs on several threads, which a browser allows only to a page that comes with two headers (`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`); where the server does not send them, `web/sw.js` adds them in the browser, at the cost of loading the page twice the first time, and that needs https (or localhost). And GameApi fetches a model in blocks with Range requests, which most servers answer. `tools/serve.py` does both.
+
+The built files are in the repository, so `web` can be deployed from a clone without building anything. They were built against GameApi's `more_stable` branch with the three changes in `GameApi-patches/` applied (fixes to its loading, and two boxes this game does not use), with the folder of the build taken out of the files afterwards, as `web.sh` does.
 
 In the browser the game is the same program with three differences, all in `game.cpp` under `__EMSCRIPTEN__`: every model is asked for at the start and the scenes are built in the first frame after the last has arrived (a browser fetches only while the program is not running); the browser calls for each frame; and there is no watch that starts the program afresh. Esc does nothing there. It has been run in Chromium without a screen and in Chrome on Windows with a graphics card (through Direct3D), with keys and the mouse sent by a test program: the pictures look as they do on the desktop. It takes 1.0 GB of memory with Jupiter loaded and 1.3 GB with all four planets, and that did not grow over two minutes of changing planets, cameras and views.
 
@@ -257,6 +259,7 @@ SDL_VIDEO_X11_FORCE_EGL=1 LD_LIBRARY_PATH=../GameApi/GameApi ../GameApi/GameApi/
 | `models/probe/` | NASA's Voyager model in three plain glTF parts, each with its texture; `tools/undraco.py` made them from `models/voyager-probe-b.glb` and put the sunlight in |
 | `screens/` | pictures from the game |
 | `GameApi/` | the engine, as a git submodule (its `more_stable` branch) |
+| `GameApi-patches/` | our changes to the engine, as patches on that branch; the program in `web/` is built with them |
 | `run.sh` | builds and runs the simulation |
 
 ## Not in the model
@@ -277,4 +280,4 @@ Thrust, radiation and heat recoil, flattening beyond J2, rings and small moons, 
 
 ## Licence
 
-Our own files (the simulation, the game, `orbit/orbit.hpp`, the scripts) are under the Apache License 2.0, see `LICENSE`. The data, the maps, the spacecraft model and GameApi are their owners' and keep the terms listed under Sources.
+Our own files (the simulation, the game, `orbit/orbit.hpp`, the scripts) are under the Apache License 2.0, see `LICENSE`. The data, the maps, the spacecraft model and GameApi are their owners' and keep the terms listed under Sources. `web/game.js` and `web/game.wasm` contain GameApi and are under its licence (GPL or LGPL, see `GameApi/`); its source is the submodule's commit plus `GameApi-patches/`, which are under GameApi's licence too.

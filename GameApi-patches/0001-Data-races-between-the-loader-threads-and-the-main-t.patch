@@ -1,0 +1,866 @@
+From 80607fdb819198b629b89b26e3bb3146367c05a4 Mon Sep 17 00:00:00 2001
+From: Henri Sundelin <henris42@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 20:07:46 +0200
+Subject: [PATCH 1/2] Data races between the loader threads and the main
+ thread, a use-after-free at exit, and smaller faults
+
+Found with address- and thread-sanitizer builds running a host program
+(a glTF scene of about 60 files loaded through async_load_url, drawn with
+execute_ml). Before: 45 kinds of race reported per start and a
+heap-use-after-free in InstallProgress in one run of three. After: none
+in the engine.
+
+Races
+- InstallProgress, ProgressBar, SetTicks, FindProgressVal/Max, SetupProgress,
+  ClearProgress: the progress lists were pushed to by loader threads and the
+  main thread at once. One recursive mutex around them.
+- add_async_cb / rem_async_cb: the callback list, the same way.
+- Task queue: wait_for_push_or_shutdown read the queue under `mutex` while
+  it is changed under `queue_mutex`. Lock order is now mutex, then
+  queue_mutex; push_to_queue signals after it has let go of queue_mutex.
+  tasks_async_join_m and tasks_done_queue_clear take queue_mutex.
+- g_current_size / g_total_size (std::map written by several loaders).
+- del_map::async_get2 used its list entry after unlocking.
+- g_del_map_deleter_installed, thread_counter, task_num: atomic.
+- GltfMeshAllP::FacePoint (both classes): the one-entry cache was shared by
+  the threads that copy one mesh in parallel, which could hand out a torn
+  point. The cache is per thread now.
+- LoadGltf::PrePrepare could run on the loader thread and the main thread
+  at once.
+- g_copy_progress was incremented by every copying thread for each face and
+  read by nobody; the increment is gone.
+
+Memory
+- VertexArraySet: a copy followed a pointer to its original in its
+  destructor; at exit (Rest::~Rest) the original was already deleted. The
+  original and its copies now share an owner that deletes the Polys once,
+  whatever the order.
+- load_urls2: when two tasks loaded one url at the same time, the second
+  result replaced the first and the first buffer was lost. The first stays,
+  the second is freed.
+- thread_func_gltf_bitmap: the downscale of images over 512 px used the
+  height as the length of a row and wrote 4 bytes per pixel whatever the
+  format: out of bounds for an image taller than wide.
+
+Other
+- ASyncLoader::get_loaded_data added the "load_url.php?url=" prefix to the
+  url on every pass of its retry loop, so only the first pass could match.
+- fetch_2_success (Emscripten): the loop over g_pending_fetch ran to the
+  size of another list, so finished urls stayed marked as pending.
+- Makefile: `ifeq (DEBUG,address)` compared two constants;
+  `make DEBUG=address` now turns the address sanitizer on.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+---
+ GameApi/GameApi_dep_env.cc | 100 ++++++++++++++++++++++++++-----------
+ GameApi/GameApi_gltf.cc    |  66 +++++++++++-------------
+ GameApi/GameApi_pl.cc      |   2 +-
+ GameApi/Makefile           |   2 +-
+ GameApi/VertexArray.cc     |  50 ++++++-------------
+ GameApi/VertexArray.hh     |  16 +++---
+ 6 files changed, 128 insertions(+), 108 deletions(-)
+
+diff --git a/GameApi/GameApi_dep_env.cc b/GameApi/GameApi_dep_env.cc
+index 74ceb64..7349b99 100644
+--- a/GameApi/GameApi_dep_env.cc
++++ b/GameApi/GameApi_dep_env.cc
+@@ -10,6 +10,7 @@
+ #endif
+ 
+ #include <atomic>
++#include <mutex>
+ #ifndef WINDOWS
+ #include <thread>
+ #include <chrono>
+@@ -300,7 +301,7 @@ std::cout << "You should check if element exists before calling async_get" << st
+ 
+ del_map g_del_map_impl;
+ del_map_interface &g_del_map = g_del_map_impl;
+-bool g_del_map_deleter_installed=false;
++std::atomic<bool> g_del_map_deleter_installed{false}; // set by the first loader thread that gets there
+ 
+ 
+ class ASyncDataFetcher : public GameApi::ASyncVec
+@@ -365,10 +366,12 @@ GameApi::ASyncVec *del_map::async_get2(std::string url)
+ 	VECENTRY &e = load_url_buffers_async[i];
+ 	//std::cout << "COMPARE:'" << e.first << "' '" << url << "'" << std::endl;
+ 	if (e.first == url)
+-	  { ret=e;
++	  {
++	    // made while the lock is held: e is a place in the list, which a loader thread may move
++	    GameApi::ASyncVec *found = new ASyncDataFetcher(e.second);
+ 	    pthread_mutex_unlock(&lock);
+ 	    //std::cout << "FOUND" << std::endl;
+-	    return new ASyncDataFetcher(e.second); // WAS ret.
++	    return found;
+ 	  }
+       }
+ std::cout << "You should check if element exists before calling async_get" << std::endl;
+@@ -434,9 +437,8 @@ extern task_interface &g_tasks;
+ 
+ void *task_queue_consumer(void *data)
+ {
+-  static int task_num = 0;
+-  task_num++;
+-  int task_num2 = task_num;
++  static std::atomic<int> task_num{0};
++  int task_num2 = ++task_num;
+   while(1)
+     {
+       //std::cout << "Tasks loop" << task_num2 << std::endl;
+@@ -537,7 +539,9 @@ pthread_mutex_t *g_m_mutex = 0;
+ 
+ EXPORT void tasks_done_queue_clear()
+ {
++  if (g_queue_mutex) pthread_mutex_lock(g_queue_mutex);
+   g_queue_tasks_done->clear();
++  if (g_queue_mutex) pthread_mutex_unlock(g_queue_mutex);
+ }
+ 
+ 
+@@ -839,9 +843,12 @@ int count_tasks_with_id(int id, std::vector<task_data> *data)
+ 
+ IMPORT void tasks_async_join_m(int id, void (*fptr)(void*), void *data)
+ {
++  // the worker threads change these lists
++  if (g_queue_mutex) pthread_mutex_lock(g_queue_mutex);
+   int a1 = count_tasks_with_id(id,g_queue);
+   int a2 = count_tasks_with_id(id,g_tasks_in_execute);
+   int a3 = count_tasks_with_id(id,g_queue_tasks_done);
++  if (g_queue_mutex) pthread_mutex_unlock(g_queue_mutex);
+   if (a1+a2+a3 == 0)
+     {
+       //std::cout << "No tasks in queues, " << id << ", sending cb and existing.." << std::endl;
+@@ -1129,12 +1136,22 @@ public:
+   virtual void push_to_queue(task_data d)
+   {
+     //std::cout << "pushing to queue" << d.num << std::endl;
++    // Lock order everywhere: mutex, then queue_mutex. The push is done before the
++    // signal is sent under mutex, so a waiting worker cannot miss it.
+     queue_mutex_start();
+     queue.push_back(d);
++    queue_mutex_end();
+     pthread_mutex_lock(mutex);
+     pthread_cond_signal(cond);
+     pthread_mutex_unlock(mutex);
++  }
++  // the queue is changed under queue_mutex
++  bool queue_is_empty_locked()
++  {
++    queue_mutex_start();
++    bool b = queue.size()==0;
+     queue_mutex_end();
++    return b;
+   }
+   virtual bool queue_has_data()
+   {
+@@ -1186,7 +1203,7 @@ public:
+     //check_for_progressbar(NULL);
+     
+     pthread_mutex_lock(mutex);
+-    while(queue.size()==0&&!m_shutdown_ongoing)
++    while(queue_is_empty_locked()&&!m_shutdown_ongoing)
+       {
+ 	//pthread_cond_wait(cond, mutex);
+ 	int val = wait_with_timeout(cond,mutex,300);
+@@ -2496,17 +2513,21 @@ struct ASyncCallback { void (*fptr)(void*); void *data; };
+ struct ASyncCallback2 { std::string url; ASyncCallback *cb; };
+ //std::map<std::string, ASyncCallback*> load_url_callbacks;
+ std::vector<ASyncCallback2> load_url_callbacks;
++// added to by the main thread, taken from by the loader threads
++std::mutex g_load_url_callbacks_mutex;
+ void add_async_cb(std::string url, ASyncCallback *cb)
+ {
+   //std::cout << "add_async_cb:" << url << std::endl;
+   ASyncCallback2 cb2;
+   cb2.url = url;
+   cb2.cb = cb;
++  std::lock_guard<std::mutex> guard(g_load_url_callbacks_mutex);
+   load_url_callbacks.push_back(cb2);
+ }
+ ASyncCallback *rem_async_cb(std::string url)
+ {
+   //std::cout << "rem_async_cb:" << url << std::endl;
++  std::lock_guard<std::mutex> guard(g_load_url_callbacks_mutex);
+   int s = load_url_callbacks.size();
+   int i = 0;
+   for(;i<s;i++)
+@@ -2572,9 +2593,8 @@ void onload_async_cb(unsigned int tmp, void *arg, const std::vector<unsigned cha
+   std::string url_str(url);
+   std::string url_only(striphomepage(url_str));
+   
+-    if (!g_del_map_deleter_installed)
++    if (!g_del_map_deleter_installed.exchange(true))
+       {
+-	g_del_map_deleter_installed=true;
+ 	register_cache_deleter(delmap_cache_deleter,0);
+       }
+ #ifdef EMSCRIPTEN
+@@ -2797,8 +2817,11 @@ void* process(void *ptr)
+ bool g_progress_already_done = false;
+ std::map<int,long long> g_current_size;
+ std::map<int,long long> g_total_size;
++// both are written by several loader threads at once
++std::mutex g_size_mutex;
+ long long get_current_size()
+ {
++  std::lock_guard<std::mutex> guard(g_size_mutex);
+   long long res=0;
+   std::map<int,long long>::iterator i = g_current_size.begin();
+   int ii=0;
+@@ -2817,6 +2840,7 @@ long long get_current_size()
+ }
+ long long get_total_size()
+ {
++  std::lock_guard<std::mutex> guard(g_size_mutex);
+   long long res=0;
+   std::map<int,long long>::iterator i = g_total_size.begin();
+   int ii=0;
+@@ -2912,8 +2936,9 @@ void ASyncLoader::load_all_urls(GameApi::Env &e, std::vector<std::string> urls,
+       sizes.push_back(sz);
+       total_size+=sz;
+     }
++  { std::lock_guard<std::mutex> guard(g_size_mutex);
+   g_total_size[g_progress_script_num] = total_size;
+-  g_current_size[g_progress_script_num]=0;
++  g_current_size[g_progress_script_num]=0; }
+   
+   std::vector<ProcessData*> vec;
+ 
+@@ -3232,7 +3257,7 @@ void fetch_2_success(emscripten_fetch_t *fetch)
+     }
+   onload_async_cb(333,(void*)url,vec);
+   int s2 = g_pending_fetch.size();
+-  for(int i=0;i<s;i++)
++  for(int i=0;i<s2;i++)
+     {
+       //std::cout << "Finish:" << g_pending_fetch[i] << " == " << url << std::endl;
+       if (stripprefix(striphomepage(g_pending_fetch[i]))==stripprefix(striphomepage(url))) {
+@@ -3240,7 +3265,7 @@ void fetch_2_success(emscripten_fetch_t *fetch)
+ 	g_pending_fetch.erase(g_pending_fetch.begin()+i);
+ 	g_pending_fetch_obj.erase(g_pending_fetch_obj.begin()+i);
+ 	i--;
+-	s--;
++	s2--;
+       }
+     }
+ #ifdef EMSCRIPTEN
+@@ -3445,9 +3470,8 @@ void ASyncLoader::load_urls2(GameApi::Env &e, std::string url, std::string homep
+ 	
+ 	std::string url_only = "load_url.php?url=" + url;
+ 	
+-	if (!g_del_map_deleter_installed)
++	if (!g_del_map_deleter_installed.exchange(true))
+ 	  {
+-	    g_del_map_deleter_installed=true;
+ 	    register_cache_deleter(delmap_cache_deleter,0);
+ 	  }
+ #ifdef EMSCRIPTEN
+@@ -3724,9 +3748,8 @@ void ASyncLoader::load_urls2(GameApi::Env &e, std::string url, std::string homep
+     }
+     //std::cout << "g_del_map " << url2 << " = " << (int)buf << std::endl;
+     //std::cout << "g_del_map add url(loadurls): " << url2 << std::endl;
+-    if (!g_del_map_deleter_installed)
++    if (!g_del_map_deleter_installed.exchange(true))
+       {
+-	g_del_map_deleter_installed=true;
+ 	register_cache_deleter(delmap_cache_deleter,0);
+       }
+ #ifdef EMSCRIPTEN
+@@ -3738,7 +3761,17 @@ void ASyncLoader::load_urls2(GameApi::Env &e, std::string url, std::string homep
+ 
+     // std::cout << "push_async_url: " << url2 << std::endl;
+     
+-    g_del_map.push_async_url(url2,new ASyncDataFetcher(buf));
++    {
++      // Two tasks may have loaded the same url at the same time. The one stored first
++      // stays, because readers may already point at it; the other copy is freed here.
++      // (Storing it over the first would drop the first one's buffer without freeing it.)
++      static std::mutex store_mutex;
++      std::lock_guard<std::mutex> guard(store_mutex);
++      if (!g_del_map.async_find(url2))
++	g_del_map.push_async_url(url2,new ASyncDataFetcher(buf));
++      else
++	delete buf;
++    }
+     //g_del_map.load_url_buffers_async[url2] = std::make_shared<const std::vector<unsigned char, GameApiAllocator<unsigned char> >>(*buf); //new std::vector<unsigned char>(buf);
+     //std::cout << "Async cb!" << url2 << std::endl;
+   std::string url_only = "load_url.php?url=" + oldurl;
+@@ -3900,7 +3933,8 @@ GameApi::ASyncVec *ASyncLoader::get_loaded_data(std::string url) const
+ 
+ 
+     
+-    url = "load_url.php?url=" + url;
++    // the key is made anew on each pass (adding the prefix to url itself made every pass after the first look for a doubled prefix)
++    std::string key = "load_url.php?url=" + url;
+     //std::cout << "url fetch " << url << std::endl;
+ 
+     /*
+@@ -3912,18 +3946,18 @@ GameApi::ASyncVec *ASyncLoader::get_loaded_data(std::string url) const
+     */
+     //g_del_map.print();
+     //std::cout << "FINDING: " << url << std::endl;
+-    if (g_del_map.async_find(url)) {
++    if (g_del_map.async_find(key)) {
+       //std::cout << "FOUND FROM G_DELMAP" << std::endl;
+-      return g_del_map.async_get2(url); //new ASyncDataFetcher(&(*(g_del_map.async_get(url).second)));
++      return g_del_map.async_get2(key); //new ASyncDataFetcher(&(*(g_del_map.async_get(url).second)));
+     }
+     // }
+ 
+       int u2 = g_error_urls.size();
+       for(int i=0;i<u2;i++)
+ 	{
+-	  if (remove_load(url)==std::string(g_error_urls[i]))
++	  if (remove_load(key)==std::string(g_error_urls[i]))
+ 	    {
+-	      std::cout << "Url " << remove_load(url) << " found from error urls => couldn't load the data." << std::endl;
++	      std::cout << "Url " << remove_load(key) << " found from error urls => couldn't load the data." << std::endl;
+ 	      return 0;
+ 	    }
+ 	}
+@@ -3969,10 +4003,15 @@ std::vector<int> g_setup_count;
+ int find_str(std::string s, std::string s2);
+ 
+ 
+-IMPORT void ClearProgress() { progress_max.clear(); progress_val.clear(); progress_label.clear(); g_setup.clear(); g_setup_count.clear(); }
++// The progress lists are written by the loader threads and by the main thread.
++// Recursive: InstallProgress calls SetTicks and ProgressBar.
++std::recursive_mutex g_progress_mutex;
++
++IMPORT void ClearProgress() { std::lock_guard<std::recursive_mutex> progress_guard(g_progress_mutex); progress_max.clear(); progress_val.clear(); progress_label.clear(); g_setup.clear(); g_setup_count.clear(); }
+ IMPORT void InstallProgress(int num, std::string label, int max=15)
+ {
+   if (find_str(label,"script")!=-1) return;
++  std::lock_guard<std::recursive_mutex> progress_guard(g_progress_mutex);
+   //std::cout << "InstallProgress: " << num << " " << label << " " << max << std::endl;
+   //std::cout << "InstallProgress: '" << label << "'" << std::endl;
+   //std::cout << "IB: " << num << std::endl;
+@@ -4007,6 +4046,7 @@ IMPORT void InstallProgress(int num, std::string label, int max=15)
+ }
+ 
+ void SetTicks(int num, int ticks) {
++  std::lock_guard<std::recursive_mutex> progress_guard(g_progress_mutex);
+   int s = progress_val.size();
+   for(int i=0;i<s;i++) {
+     if (progress_val[i].num == num) {
+@@ -4024,6 +4064,7 @@ int g_max2;
+ 
+ IMPORT long long FindProgressVal()
+ {
++  std::lock_guard<std::recursive_mutex> progress_guard(g_progress_mutex);
+ 
+ #if 0
+   int res=0;
+@@ -4092,6 +4133,7 @@ IMPORT long long FindProgressVal()
+ int g_async_load_count = 0;
+ long long FindProgressMax()
+ {
++  std::lock_guard<std::recursive_mutex> progress_guard(g_progress_mutex);
+ 
+ #if 0
+   int res=0;
+@@ -4186,6 +4228,7 @@ IMPORT void (*update_progress_dialog_cb)(volatile GameApi::W &w, int,int, GameAp
+ 
+ void SetupProgress(int num, int count)
+ {
++  std::lock_guard<std::recursive_mutex> progress_guard(g_progress_mutex);
+   g_setup.push_back(num);
+   g_setup_count.push_back(count);
+ }
+@@ -4206,6 +4249,7 @@ void ProgressBar(int num, int val, int max, std::string label)
+   pthread_t curr = pthread_self();
+   if (!pthread_equal(curr, g_main_thread_id)) return;
+ #endif
++  std::lock_guard<std::recursive_mutex> progress_guard(g_progress_mutex);
+   /// std::cout << "ProgressBar: '" << num << " " << label << " " << val << " " << max << "'" << std::endl;
+ 
+   //std::cout << "PB: " << num << std::endl;
+@@ -5245,7 +5289,7 @@ std::vector<unsigned char, GameApiAllocator<unsigned char> > *load_from_url(Game
+     {
+       if (remove_load(url)==g_urls[i]) { 
+ 	std::vector<unsigned char, GameApiAllocator<unsigned char> > *vec = new std::vector<unsigned char, GameApiAllocator<unsigned char> >(g_content[i], g_content_end[i]);
+-	g_current_size[progress_script_num]+=vec->size();
++	{ std::lock_guard<std::mutex> guard(g_size_mutex); g_current_size[progress_script_num]+=vec->size(); }
+ 
+ 	return vec;
+       }
+@@ -5334,7 +5378,7 @@ std::vector<unsigned char, GameApiAllocator<unsigned char> > *load_from_url(Game
+     }
+     }
+     //std::cout << "POPEN GOT Content-Length: " << num << std::endl;
+-    g_total_size[progress_script_num] = num;
++    { std::lock_guard<std::mutex> guard(g_size_mutex); g_total_size[progress_script_num] = num; }
+ 
+ 
+ 
+@@ -5425,7 +5469,7 @@ std::vector<unsigned char, GameApiAllocator<unsigned char> > *load_from_url(Game
+ 	//	    if (nosize) { std::cout << "fread" << std::endl; }
+       //std::cout << c;
+       i+=bytes_read;
+-      g_current_size[progress_script_num]+=bytes_read;
++      { std::lock_guard<std::mutex> guard(g_size_mutex); g_current_size[progress_script_num]+=bytes_read; }
+       if (!g_progress_already_done && num/15>0 && i%(num/15)==0) {
+ 	int s = url.size();
+ 	int sum=0;
+@@ -5459,7 +5503,7 @@ std::vector<unsigned char, GameApiAllocator<unsigned char> > *load_from_url(Game
+ #ifdef WINDOWS
+     while ( fread(&c,1,1,f)==1) {
+       i++;
+-      g_current_size[progress_script_num]++;
++      { std::lock_guard<std::mutex> guard(g_size_mutex); g_current_size[progress_script_num]++; }
+       if (!g_progress_already_done && num/15>0 && i%(num/15)==0) {
+ 	int s = url.size();
+ 	int sum=0;
+@@ -5518,7 +5562,7 @@ std::vector<unsigned char, GameApiAllocator<unsigned char> > *load_from_url(Game
+     long long i = 0;
+     while(fread(&c,1,1,f)==1) {
+       i++;
+-      g_current_size[progress_script_num]++;
++      { std::lock_guard<std::mutex> guard(g_size_mutex); g_current_size[progress_script_num]++; }
+       if (!g_progress_already_done && num/15>0 && i%(num/15)==0) {
+ 	int s = url.size();
+ 	int sum=0;
+diff --git a/GameApi/GameApi_gltf.cc b/GameApi/GameApi_gltf.cc
+index 182a8fd..e999375 100644
+--- a/GameApi/GameApi_gltf.cc
++++ b/GameApi/GameApi_gltf.cc
+@@ -1,3 +1,5 @@
++#include <mutex>
++#include <atomic>
+ 
+ int hhhh_gggg=1;
+ 
+@@ -707,6 +709,7 @@ int g_loadgltf_uni_id = 0;
+ int splitter_cb_count();
+ class LoadGltf : public CollectInterface
+ {
++  std::recursive_mutex preprepare_mutex;
+ public:
+   LoadGltf(GameApi::Env &e, std::string base_url, std::string url, std::string homepage, bool is_binary) : e(e), base_url(base_url), url(url), homepage(homepage), is_binary(is_binary) {
+     //std::cout << "LoadGltf::URLS:" << base_url << " :: " << url << std::endl;
+@@ -1118,6 +1121,8 @@ public:
+   }
+   void PrePrepare() {
+     //std::cout << "PREPREPARE CALLED WITH async=" << async << std::endl;
++    // called by the loader thread (LoadGltf_cb) and by the main thread (Prepare); one at a time
++    std::lock_guard<std::recursive_mutex> preprepare_guard(preprepare_mutex);
+ #ifdef EMSCRIPTEN
+     if (async) {
+       async_pending_count--;
+@@ -2268,10 +2273,9 @@ void *thread_func_gltf_bitmap(void *data2)
+     for(int y=0;y<new_h;y++)
+       for(int x=0;x<new_w;x++)
+ 	{
+-	  unsigned int *ptr = (unsigned int*)(data + (y*reduce)*h*comp*(bits/8) + (x*reduce)*comp*(bits/8));
+-	  unsigned int val = *ptr;
+-	  unsigned int *ptr2 = (unsigned int*)((&image->image[0]) + (y*new_h*comp*(bits/8)) + (x*comp*(bits/8)));
+-	  *ptr2 = val;			      
++	  // a row is w pixels long (not h), and a pixel is comp*(bits/8) bytes (not always 4)
++	  const int px = comp*(bits/8);
++	  std::memcpy((&image->image[0]) + (size_t(y)*new_w + x)*px, data + (size_t(y)*reduce*w + size_t(x)*reduce)*px, px);			      
+ 	 }
+     image->width = new_w;
+     image->height= new_h;
+@@ -10819,6 +10823,16 @@ private:
+ };
+ 
+ 
++// One thread's cache of the last FacePoint results of one mesh object (see GltfMeshAllP::FacePoint).
++struct FacePointCache { int owner=-1; int face[4]={-1,-1,-1,-1}; Point res[4]; };
++static int new_facepoint_cache_id() { static std::atomic<int> next{0}; return next++; }
++static FacePointCache &facepoint_cache(int owner)
++{
++  thread_local FacePointCache c;
++  if (c.owner!=owner) { c = FacePointCache(); c.owner = owner; }
++  return c;
++}
++
+ class GltfMeshAllP : public FaceCollection
+ {
+ public:
+@@ -10898,18 +10912,15 @@ public:
+     return coll->NumPoints(face);
+   }
+   virtual Point FacePoint(int face, int point) const {
+-      if (point==0&&cache_0&&cache_face_0==face) { return cache_res_0; }
+-      if (point==1&&cache_1&&cache_face_1==face) { return cache_res_1; }
+-      if (point==2&&cache_2&&cache_face_2==face) { return cache_res_2; }
+-      if (point==3&&cache_3&&cache_face_3==face) { return cache_res_3; }
++    // The last point asked for, per corner. Several threads copy one mesh at the
++    // same time, so each thread has its own (a shared one gave torn points).
++    FacePointCache &c = facepoint_cache(cache_id);
++    if (point>=0&&point<4&&c.face[point]==face) { return c.res[point]; }
+     if (res.id==-1) return Point(0.0,0.0,0.0);
+     FaceCollection *coll = find_facecoll(env,res);
+     if (!coll) return Point(0.0,0.0,0.0);
+     Point p = coll->FacePoint(face,point);
+-    if (point==0) { cache_res_0=p; cache_0=true; cache_face_0=face;}
+-    if (point==1) { cache_res_1=p; cache_1=true; cache_face_1=face;}
+-    if (point==2) { cache_res_2=p; cache_2=true; cache_face_2=face;}
+-    if (point==3) { cache_res_3=p; cache_3=true; cache_face_3=face;}
++    if (point>=0&&point<4) { c.res[point]=p; c.face[point]=face; }
+     return p;
+   }
+   virtual Vector PointNormal(int face, int point) const
+@@ -11024,14 +11035,7 @@ private:
+   GLTFModelInterface *interface;
+   GameApi::P res;
+ private:
+-  mutable int cache_face_0=-1;
+-  mutable int cache_face_1=-1;
+-  mutable int cache_face_2=-1;
+-  mutable int cache_face_3=-1;
+-  mutable Point cache_res_0; mutable bool cache_0=false;
+-  mutable Point cache_res_1; mutable bool cache_1=false;
+-  mutable Point cache_res_2; mutable bool cache_2=false;
+-  mutable Point cache_res_3; mutable bool cache_3=false;
++  const int cache_id = new_facepoint_cache_id();
+   
+   };
+ 
+@@ -11663,18 +11667,15 @@ public:
+     return coll->NumPoints(face);
+   }
+   virtual Point FacePoint(int face, int point) const {
+-      if (point==0&&cache_0&&cache_face_0==face) { return cache_res_0; }
+-      if (point==1&&cache_1&&cache_face_1==face) { return cache_res_1; }
+-      if (point==2&&cache_2&&cache_face_2==face) { return cache_res_2; }
+-      if (point==3&&cache_3&&cache_face_3==face) { return cache_res_3; }
++    // The last point asked for, per corner. Several threads copy one mesh at the
++    // same time, so each thread has its own (a shared one gave torn points).
++    FacePointCache &c = facepoint_cache(cache_id);
++    if (point>=0&&point<4&&c.face[point]==face) { return c.res[point]; }
+     if (res.id==-1) return Point(0.0,0.0,0.0);
+     FaceCollection *coll = find_facecoll(env,res);
+     if (!coll) return Point(0.0,0.0,0.0);
+     Point p = coll->FacePoint(face,point);
+-    if (point==0) { cache_res_0=p; cache_0=true; cache_face_0=face;}
+-    if (point==1) { cache_res_1=p; cache_1=true; cache_face_1=face;}
+-    if (point==2) { cache_res_2=p; cache_2=true; cache_face_2=face;}
+-    if (point==3) { cache_res_3=p; cache_3=true; cache_face_3=face;}
++    if (point>=0&&point<4) { c.res[point]=p; c.face[point]=face; }
+     return p;
+   }
+   virtual Vector PointNormal(int face, int point) const
+@@ -11778,14 +11779,7 @@ private:
+   GLTFModelInterface *interface;
+   GameApi::P res;
+ private:
+-  mutable int cache_face_0=-1;
+-  mutable int cache_face_1=-1;
+-  mutable int cache_face_2=-1;
+-  mutable int cache_face_3=-1;
+-  mutable Point cache_res_0; mutable bool cache_0=false;
+-  mutable Point cache_res_1; mutable bool cache_1=false;
+-  mutable Point cache_res_2; mutable bool cache_2=false;
+-  mutable Point cache_res_3; mutable bool cache_3=false;
++  const int cache_id = new_facepoint_cache_id();
+   int i;
+   static std::map<GLTFModelInterface*,GameApi::ARR> g_cache;
+   static std::map<GLTFModelInterface*,GameApi::P> g_cache2;
+diff --git a/GameApi/GameApi_pl.cc b/GameApi/GameApi_pl.cc
+index 0cb4a90..073e8f7 100644
+--- a/GameApi/GameApi_pl.cc
++++ b/GameApi/GameApi_pl.cc
+@@ -6341,7 +6341,7 @@ void ProgressBar(int num, int val, int max, std::string label);
+ extern ThreadInfo volatile *ti_global;
+ pthread_cond_t *g_cond;
+ #endif
+-extern volatile int thread_counter;
++extern std::atomic<int> thread_counter;
+ 
+ extern std::atomic<bool> g_lock1;
+ extern std::atomic<bool> g_lock2;
+diff --git a/GameApi/Makefile b/GameApi/Makefile
+index 4a3f338..874fb84 100644
+--- a/GameApi/Makefile
++++ b/GameApi/Makefile
+@@ -213,7 +213,7 @@ WARN = -Wno-overloaded-virtual -Wno-unused-variable -Wno-sign-compare -Wno-reord
+ #  -I/usr/include/freetype2 -I$(INCWIN) -I$(INC2WIN) -I$(INC3WIN) -I$(INC4WIN) -I$(INC5WIN) -DGLEW_STATIC
+ 
+ ADDRESS=
+-ifeq (DEBUG,address)
++ifeq ($(DEBUG),address)
+ ADDRESS=-fsanitize=address
+ endif
+ RASPI=
+diff --git a/GameApi/VertexArray.cc b/GameApi/VertexArray.cc
+index bc6fd67..b76d308 100644
+--- a/GameApi/VertexArray.cc
++++ b/GameApi/VertexArray.cc
+@@ -1,3 +1,4 @@
++#include <algorithm>
+ 
+ #include "VertexArray.hh"
+ 
+@@ -37,7 +38,6 @@ void VertexArraySet::print_stat(int id)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];  
+     }
+   //std::cout << "tri_polys: " << p->tri_polys.size() << std::endl;
+@@ -50,7 +50,6 @@ void VertexArraySet::explode(int id, Point pt, float dist)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];  
+     }
+   std::vector<std::vector<Point>* > vec;
+@@ -88,7 +87,6 @@ void VertexArraySet::clear_vectors(int id)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];  
+     }
+   p->tri_polys.clear();
+@@ -124,7 +122,6 @@ void VertexArraySet::clear_poly_and_poly2(int id)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];  
+     }
+   p->tri_polys.clear();
+@@ -140,7 +137,6 @@ void VertexArraySet::free_reserve(int id)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];  
+     }
+   p->tri_polys.resize(0);
+@@ -183,7 +179,6 @@ void VertexArraySet::set_reserve(int id, int tri_count, int quad_count, int poly
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];  
+     }
+   //std::cout << "Reserve: " << tri_count << " " << quad_count << std::endl;
+@@ -247,7 +242,6 @@ bool range_check(int i, int points_num)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num < 3) return;
+@@ -302,7 +296,6 @@ void VertexArraySet::push_poly(int id, int num, Point *points)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num < 3) return;
+@@ -348,7 +341,6 @@ void VertexArraySet::push_poly2_with_indices(int id, int num, Point *points, uns
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num < 3) return;
+@@ -404,7 +396,6 @@ void VertexArraySet::push_poly2(int id, int num, Point *points)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num<3) return;
+@@ -451,7 +442,6 @@ void VertexArraySet::push_normal_with_indices(int id, int num, Vector *points, u
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num<3)
+@@ -508,7 +498,6 @@ void VertexArraySet::push_normal(int id, int num, Vector *points)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num<3)
+@@ -555,7 +544,6 @@ void VertexArraySet::push_attrib(int id, int attrib_id, int num, float *points)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num<3) return;
+@@ -600,7 +588,6 @@ void VertexArraySet::push_attribi(int id, int attrib_id, int num, int *points)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num<3) return;
+@@ -687,7 +674,6 @@ void VertexArraySet::push_color_with_indices(int id, int num, unsigned int *poin
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num<3) return;
+@@ -741,7 +727,6 @@ void VertexArraySet::push_color(int id, int num, unsigned int *points)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num<3) return;
+@@ -787,7 +772,6 @@ void VertexArraySet::push_joint_with_indices(int id, int num, VEC4 *points, unsi
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num<3) return;
+@@ -845,7 +829,6 @@ void VertexArraySet::push_joint(int id, int num, VEC4 *points)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num<3) return;
+@@ -893,7 +876,6 @@ void VertexArraySet::push_weight_with_indices(int id, int num, VEC4 *points, uns
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num<3) return;
+@@ -950,7 +932,6 @@ void VertexArraySet::push_weight(int id, int num, VEC4 *points)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num<3) return;
+@@ -997,7 +978,6 @@ void VertexArraySet::push_texcoord_with_indices(int id, int num, Point *points,
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num<3) return;
+@@ -1054,7 +1034,6 @@ void VertexArraySet::push_texcoord(int id, int num, Point *points)
+   if (!p)
+     {
+       m_set[id] = new Polys;
+-      ref_count = 1;
+       p = m_set[id];
+     }
+   if (num<3) return;
+@@ -1164,19 +1143,20 @@ void VertexArraySet::apply_change(DynamicChange *change, int id_source, int id_t
+ }
+ VertexArraySet::~VertexArraySet()
+ {
+-    std::mymap<int,Polys*>::iterator it = m_set.begin();
+-    const VertexArraySet *curr = this;
+-    bool still_alive = false;
+-    while(curr->m_ref) curr=curr->m_ref;
+-    curr->ref_count--;
+-    if (curr->ref_count==0) {
+-      for(;it!=m_set.end();it++)
+-	{
+-	  Polys *ptr = (*it).second;
+-	  delete ptr;
+-	}
++  // hand the Polys to the shared owner; it deletes each of them once, at the end
++  std::mymap<int,Polys*>::iterator it = m_set.begin();
++  for(;it!=m_set.end();it++)
++    {
++      Polys *ptr = (*it).second;
++      if (ptr && std::find(m_owner->polys.begin(), m_owner->polys.end(), ptr)==m_owner->polys.end())
++	m_owner->polys.push_back(ptr);
+     }
+ }
++VertexArraySet::PolysOwner::~PolysOwner()
++{
++  int s = polys.size();
++  for(int i=0;i<s;i++) delete polys[i];
++}
+ void VertexArraySet::free_memory()
+ {
+ #if 1
+@@ -4053,7 +4033,7 @@ std::atomic<bool> g_lock1, g_lock2, g_lock3;
+ 
+ #ifndef ARM
+ ThreadInfo volatile *ti_global;
+-volatile int thread_counter=0;
++std::atomic<int> thread_counter{0};
+ 
+ void *thread_func(void *data)
+ {
+@@ -4212,7 +4192,7 @@ void FaceCollectionVertexArray2::copy(int start_range, int end_range, std::vecto
+     
+     for(int i=start_range;i<end_range;i++)
+       {
+-	g_copy_progress++;
++	// (g_copy_progress was counted here by every copying thread at once; nothing reads it)
+ 	//std::cout << "F" << i << std::endl;
+ 	//if ((i-start_range)%1000==0) { std::cout << "Face: " << i << std::endl; }
+ 	int w = coll.NumPoints(i);
+diff --git a/GameApi/VertexArray.hh b/GameApi/VertexArray.hh
+index f389a27..00ca07d 100644
+--- a/GameApi/VertexArray.hh
++++ b/GameApi/VertexArray.hh
+@@ -5,6 +5,7 @@
+ #define NO_PREPARE_RENDER 1
+ 
+ #include <vector>
++#include <memory>
+ #include <map>
+ #include "MyMap.hh"
+ #include "VectorTools.hh"
+@@ -77,11 +78,7 @@ public:
+       {
+ 	m_set[(*it).first] = (*it).second; //new Polys(*(*it).second);
+       }
+-    const VertexArraySet *curr = &s;
+-    while (curr->m_ref) { curr=curr->m_ref; }
+-    curr->ref_count++;
+-    ref_count=0;
+-    m_ref = &s;
++    m_owner = s.m_owner; // the copy and the original free their shared data together
+     bm_id = 0;
+     texture_id = s.texture_id;
+     texture_many_ids = s.texture_many_ids;
+@@ -307,8 +304,13 @@ public:
+   static void append_to_polys(VertexArraySet::Polys &target, const VertexArraySet::Polys &source);
+ 
+   mutable std::mymap<int, Polys*> m_set;
+-  mutable int ref_count=0;
+-  mutable const VertexArraySet *m_ref=0;
++  // A copy shares the Polys of its original. They are deleted when the last of the
++  // original and its copies is gone, in whatever order those are destroyed.
++  struct PolysOwner {
++    std::vector<Polys*> polys;
++    ~PolysOwner();
++  };
++  std::shared_ptr<PolysOwner> m_owner = std::make_shared<PolysOwner>();
+   bool has_normal=true;
+   bool has_attrib=false;
+   bool has_color=true;
+-- 
+2.53.0
+
