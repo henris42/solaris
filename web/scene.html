@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>scene</title>
+<canvas id="canvas" width="1200" height="900" style="background:#000"></canvas>
+<script>
+// Runs a GameApi scene script in the engine's own browser build (engine_highmem.js and
+// engine_highmem.wasm beside this page).   scene.html?script=<file>[&from=<url>&to=<url>]
+// from/to: every <from> in the script becomes <to>, e.g. to load the models from this server.
+var g_ready_bit = 0;  // the engine's script looks for it
+const q = new URLSearchParams(location.search);
+fetch(q.get('script') || 'scene.txt').then(r => r.text()).then(text => {
+  if (q.get('from')) text = text.replaceAll(q.get('from'), new URL(q.get('to') || '.', location.href).href);
+  const code = text.split('\n').map(l => l.replace(/\s*\/\/ \d+,\d+\s*$/, '').trim()).filter(Boolean).join('@');
+  window.Module = {
+    arguments: ['--size', '1200', '900', '--code', code, '--homepage', location.origin + '/', '--href', location.href],
+    canvas: document.getElementById('canvas'),
+    print: t => console.log(t),
+    printErr: t => console.error(t),
+    onStartup: () => {},
+  };
+  const s = document.createElement('script');
+  s.src = 'engine_highmem.js';
+  document.body.appendChild(s);
+});
+</script>
