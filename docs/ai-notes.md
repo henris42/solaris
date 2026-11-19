@@ -64,6 +64,18 @@ The engine holds each file several times over: here the heap grew by 21 to 26 ti
 - Leaving a hole where two revolved surfaces should meet (gills and stem): the inside of the cap showed through as a red spot.
 - A JSON `operator[]` overloaded for both `const char*` and `size_t` is ambiguous for the literal `0`.
 
+## Adding a box to the engine (the walking boxes, `docs/walking-boxes.md`)
+
+- The author's rule: new boxes, existing ones unchanged; if an existing box must take part, extend it so that it behaves as before when the new thing is absent. Globals that a new box sets and an old box reads (`quake_pos_height`, `quake_push_x/z`) are the engine's own style for this.
+- A box is a `MainLoopItem` (Collect, HeavyPrepare, Prepare, execute, handle_event, shader_id), a member function declared in `GameApi.hh` that wraps it with `add_main_loop`, and an `ApiItemF` entry in a `GameApi_cmd_*.cc` file giving the script name, parameter names, types and defaults.
+- MEASURED. Faces of a loaded model: `gltf_mesh_all_p(ev, TF)` gives a `P`; `find_facecoll(e, p)` gives a `FaceCollection` with `NumFaces`, `NumPoints(face)`, `FacePoint(face, i)`. Call its `Prepare()` in the box's `Prepare()` and read the faces on the first `execute`, when the model has arrived.
+- MEASURED. These faces are in the same coordinates as what `gltf_mesh_all` draws from the same `TF` (the model scaled to 400 units), so a box wrapped around that `ML` can use `in_MV` for both.
+- MEASURED. `A * B` on `Matrix` applies A first; `Point * Matrix` transforms a point. Under `quake_ml2` the walker is at view point (0, 0, 400), and `Point(0,0,400) * Matrix::Inverse(e.in_MV * e.in_T)` is the walker in the box's own coordinates.
+- Skip faces without area: the box-spanning triangle of a scene file is one.
+- A header change makes both makefiles rebuild everything. Adding a member function changes no layout: `make -o GameApi.hh ...` rebuilds only the changed sources (1 minute instead of 6).
+- Verifying a box that acts on movement: print a line every N frames from the box (position among the faces, the looked-up value, the output), drive the page with held keys, read the lines, then remove the printing. Pictures alone do not show whether a height is followed.
+- MEASURED. A key "held" through the DevTools protocol (`keyDown` without `keyUp`) moves the walker for about 10 seconds and then stops; plan walks shorter than that.
+
 ## Free-material rule
 
 "Only free resources" was met by computing everything. If outside material is ever needed, record for each item its source URL and licence in the docs before using it, and prefer CC0.

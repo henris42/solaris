@@ -249,6 +249,7 @@ SDL_VIDEO_X11_FORCE_EGL=1 LD_LIBRARY_PATH=../GameApi/GameApi ../GameApi/GameApi/
 | `textures/` | surface maps; `fetch-textures.sh` fetches and prepares them again |
 | `tools/fill.cpp` | makes up the unseen parts of the moons' maps |
 | `tools/antforest.cpp`, `web/scene.html`, `docs/` | a side piece for GameApi's ant scene: computes new ground, grass, trees and mushrooms for it (`docs/antforest.md`; `docs/ai-notes.md` is the same job's notes for an AI agent) |
+| `docs/walking-boxes.md` | two boxes proposed for GameApi's walker: follow a mesh ground, and stay out of things |
 | `models/probe/` | NASA's Voyager model in three plain glTF parts, each with its texture; `tools/undraco.py` made them from `models/voyager-probe-b.glb` and put the sunlight in |
 | `screens/` | pictures from the game |
 | `GameApi/` | the engine, as a git submodule (its `more_stable` branch) |
